@@ -34,7 +34,6 @@ Error code scheme:
 2003  : invalid velocity_x buffer
 2004  : invalid velocity_y buffer
 2005  : invalid velocity_z buffer
-2006  : invalid destination buffer
 2007  : invalid temporary previous density buffer
 2008  : invalid temporary previous temperature buffer
 2009  : invalid temporary previous velocity_x buffer
@@ -66,8 +65,6 @@ VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_add_source_asy
 VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_step_async(void* density, void* temperature, void* velocity_x, void* velocity_y, void* velocity_z, int32_t nx, int32_t ny, int32_t nz, float cell_size, void* temporary_previous_density, void* temporary_previous_temperature, void* temporary_previous_velocity_x,
     void* temporary_previous_velocity_y, void* temporary_previous_velocity_z, void* temporary_pressure, void* temporary_divergence, void* temporary_omega_x, void* temporary_omega_y, void* temporary_omega_z, void* temporary_omega_magnitude, void* temporary_force_x, void* temporary_force_y, void* temporary_force_z, float dt, float ambient_temperature,
     float density_buoyancy, float temperature_buoyancy, float vorticity_epsilon, int32_t pressure_iterations, int32_t block_x, int32_t block_y, int32_t block_z, uint32_t use_monotonic_cubic, void* cuda_stream);
-
-VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_compute_velocity_magnitude_async(void* velocity_x, void* velocity_y, void* velocity_z, void* destination, int32_t nx, int32_t ny, int32_t nz, int32_t block_x, int32_t block_y, int32_t block_z, void* cuda_stream);
 
 #ifdef __cplusplus
 }

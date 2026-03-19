@@ -322,8 +322,8 @@ namespace visual_smoke {
             const int j = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
             const int k = static_cast<int>(blockIdx.z * blockDim.z + threadIdx.z);
             if (i > nx || j >= ny || k >= nz) return;
-            const float3 pos                    = make_float3(static_cast<float>(i) * h, (static_cast<float>(j) + 0.5f) * h, (static_cast<float>(k) + 0.5f) * h);
-            const float3 vel                    = sample_velocity(src_u, src_v, src_w, pos, nx, ny, nz, h, cubic);
+            const float3 pos                   = make_float3(static_cast<float>(i) * h, (static_cast<float>(j) + 0.5f) * h, (static_cast<float>(k) + 0.5f) * h);
+            const float3 vel                   = sample_velocity(src_u, src_v, src_w, pos, nx, ny, nz, h, cubic);
             dst[index_3d(i, j, k, nx + 1, ny)] = sample_u(src_u, clamp_domain(make_float3(pos.x - dt * vel.x, pos.y - dt * vel.y, pos.z - dt * vel.z), nx, ny, nz, h), nx, ny, nz, h, cubic);
         }
 
@@ -332,8 +332,8 @@ namespace visual_smoke {
             const int j = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
             const int k = static_cast<int>(blockIdx.z * blockDim.z + threadIdx.z);
             if (i >= nx || j > ny || k >= nz) return;
-            const float3 pos                    = make_float3((static_cast<float>(i) + 0.5f) * h, static_cast<float>(j) * h, (static_cast<float>(k) + 0.5f) * h);
-            const float3 vel                    = sample_velocity(src_u, src_v, src_w, pos, nx, ny, nz, h, cubic);
+            const float3 pos                   = make_float3((static_cast<float>(i) + 0.5f) * h, static_cast<float>(j) * h, (static_cast<float>(k) + 0.5f) * h);
+            const float3 vel                   = sample_velocity(src_u, src_v, src_w, pos, nx, ny, nz, h, cubic);
             dst[index_3d(i, j, k, nx, ny + 1)] = sample_v(src_v, clamp_domain(make_float3(pos.x - dt * vel.x, pos.y - dt * vel.y, pos.z - dt * vel.z), nx, ny, nz, h), nx, ny, nz, h, cubic);
         }
 
@@ -342,8 +342,8 @@ namespace visual_smoke {
             const int j = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
             const int k = static_cast<int>(blockIdx.z * blockDim.z + threadIdx.z);
             if (i >= nx || j >= ny || k > nz) return;
-            const float3 pos                = make_float3((static_cast<float>(i) + 0.5f) * h, (static_cast<float>(j) + 0.5f) * h, static_cast<float>(k) * h);
-            const float3 vel                = sample_velocity(src_u, src_v, src_w, pos, nx, ny, nz, h, cubic);
+            const float3 pos               = make_float3((static_cast<float>(i) + 0.5f) * h, (static_cast<float>(j) + 0.5f) * h, static_cast<float>(k) * h);
+            const float3 vel               = sample_velocity(src_u, src_v, src_w, pos, nx, ny, nz, h, cubic);
             dst[index_3d(i, j, k, nx, ny)] = sample_w(src_w, clamp_domain(make_float3(pos.x - dt * vel.x, pos.y - dt * vel.y, pos.z - dt * vel.z), nx, ny, nz, h), nx, ny, nz, h, cubic);
         }
 
@@ -429,18 +429,6 @@ namespace visual_smoke {
                 float value                    = sample_scalar(src, clamp_domain(make_float3(pos.x - dt * vel.x, pos.y - dt * vel.y, pos.z - dt * vel.z), nx, ny, nz, h), nx, ny, nz, h, cubic);
                 dst[index_3d(i, j, k, nx, ny)] = clamp_nonnegative ? fmaxf(0.0f, value) : value;
             }
-        }
-
-        __global__ void snapshot_velocity_magnitude_kernel(float* dst, const float* u, const float* v, const float* w, int nx, int ny, int nz) {
-            const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-            const int j = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
-            const int k = static_cast<int>(blockIdx.z * blockDim.z + threadIdx.z);
-            if (i >= nx || j >= ny || k >= nz) return;
-
-            const float ux                 = center_u(u, i, j, k, nx, ny, nz);
-            const float vy                 = center_v(v, i, j, k, nx, ny, nz);
-            const float wz                 = center_w(w, i, j, k, nx, ny, nz);
-            dst[index_3d(i, j, k, nx, ny)] = sqrtf(ux * ux + vy * vy + wz * wz);
         }
 
     } // namespace
@@ -632,21 +620,6 @@ int32_t visual_simulation_of_smoke_step_async(void* density, void* temperature, 
         advect_scalar_kernel<<<cells, block, 0, stream>>>(temperature_f, temperature_prev, u, v, w, nx, ny, nz, cell_size, dt, cubic, false);
         if (cuda_code(cudaGetLastError()) != 0) return 5001;
     }
-    return 0;
-}
-
-int32_t visual_simulation_of_smoke_compute_velocity_magnitude_async(void* velocity_x, void* velocity_y, void* velocity_z, void* destination, int32_t nx, int32_t ny, int32_t nz, int32_t block_x, int32_t block_y, int32_t block_z, void* cuda_stream) {
-    using namespace visual_smoke;
-    if (nx <= 0 || ny <= 0 || nz <= 0) return 1001;
-    if (velocity_x == nullptr) return 2003;
-    if (velocity_y == nullptr) return 2004;
-    if (velocity_z == nullptr) return 2005;
-    if (destination == nullptr) return 2006;
-
-    nvtx3::scoped_range range{"vsmoke.snapshot_velocity_magnitude"};
-    const dim3 block{static_cast<unsigned>(std::max(block_x, 1)), static_cast<unsigned>(std::max(block_y, 1)), static_cast<unsigned>(std::max(block_z, 1))};
-    snapshot_velocity_magnitude_kernel<<<make_grid(nx, ny, nz, block), block, 0, to_stream(cuda_stream)>>>(reinterpret_cast<float*>(destination), reinterpret_cast<const float*>(velocity_x), reinterpret_cast<const float*>(velocity_y), reinterpret_cast<const float*>(velocity_z), nx, ny, nz);
-    if (cuda_code(cudaGetLastError()) != 0) return 5001;
     return 0;
 }
 
