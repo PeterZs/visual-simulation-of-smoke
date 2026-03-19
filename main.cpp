@@ -8,6 +8,9 @@
 
 #include <nvtx3/nvtx3.hpp>
 
+int32_t visual_demo_add_source_async(void* density, void* temperature, void* velocity_x, void* velocity_y, void* velocity_z, int32_t nx, int32_t ny, int32_t nz, float center_x, float center_y, float center_z, float radius, float density_amount, float temperature_amount, float velocity_source_x, float velocity_source_y,
+    float velocity_source_z, int32_t block_x, int32_t block_y, int32_t block_z, void* cuda_stream);
+
 int main() {
     nvtx3::scoped_range app_range{"vsmoke.demo"};
     auto cuda_ok = [](const cudaError_t status, const char* what) {
@@ -36,10 +39,10 @@ int main() {
     constexpr int32_t block_z              = 4;
     constexpr uint32_t use_monotonic_cubic = 1u;
 
-    const uint64_t scalar_bytes           = visual_simulation_of_smoke_scalar_field_bytes(nx, ny, nz);
-    const uint64_t velocity_x_bytes       = visual_simulation_of_smoke_velocity_x_bytes(nx, ny, nz);
-    const uint64_t velocity_y_bytes       = visual_simulation_of_smoke_velocity_y_bytes(nx, ny, nz);
-    const uint64_t velocity_z_bytes       = visual_simulation_of_smoke_velocity_z_bytes(nx, ny, nz);
+    const uint64_t scalar_bytes           = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz) * sizeof(float);
+    const uint64_t velocity_x_bytes       = static_cast<uint64_t>(nx + 1) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz) * sizeof(float);
+    const uint64_t velocity_y_bytes       = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny + 1) * static_cast<uint64_t>(nz) * sizeof(float);
+    const uint64_t velocity_z_bytes       = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz + 1) * sizeof(float);
     float* density                        = nullptr;
     float* temperature                    = nullptr;
     float* velocity_x                     = nullptr;
@@ -92,13 +95,14 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    if (!smoke_ok(visual_simulation_of_smoke_clear_async(density, temperature, velocity_x, velocity_y, velocity_z, nx, ny, nz, stream), "visual_simulation_of_smoke_clear_async")) {
+    if (!cuda_ok(cudaMemsetAsync(density, 0, scalar_bytes, stream), "cudaMemsetAsync density") || !cuda_ok(cudaMemsetAsync(temperature, 0, scalar_bytes, stream), "cudaMemsetAsync temperature") || !cuda_ok(cudaMemsetAsync(velocity_x, 0, velocity_x_bytes, stream), "cudaMemsetAsync velocity_x")
+        || !cuda_ok(cudaMemsetAsync(velocity_y, 0, velocity_y_bytes, stream), "cudaMemsetAsync velocity_y") || !cuda_ok(cudaMemsetAsync(velocity_z, 0, velocity_z_bytes, stream), "cudaMemsetAsync velocity_z")) {
         return EXIT_FAILURE;
     }
 
     for (int frame = 0; frame < 16; ++frame) {
         nvtx3::scoped_range frame_range{"vsmoke.demo.frame"};
-        if (!smoke_ok(visual_simulation_of_smoke_add_source_async(density, temperature, velocity_x, velocity_y, velocity_z, nx, ny, nz, static_cast<float>(nx) * 0.5f, static_cast<float>(ny) * 0.18f, static_cast<float>(nz) * 0.5f, 4.5f, 0.85f, 1.35f, 0.0f, 1.2f, 0.0f, block_x, block_y, block_z, stream), "visual_simulation_of_smoke_add_source_async")
+        if (!smoke_ok(visual_demo_add_source_async(density, temperature, velocity_x, velocity_y, velocity_z, nx, ny, nz, static_cast<float>(nx) * 0.5f, static_cast<float>(ny) * 0.18f, static_cast<float>(nz) * 0.5f, 4.5f, 0.85f, 1.35f, 0.0f, 1.2f, 0.0f, block_x, block_y, block_z, stream), "visual_demo_add_source_async")
             || !smoke_ok(visual_simulation_of_smoke_step_async(density, temperature, velocity_x, velocity_y, velocity_z, nx, ny, nz, cell_size, temporary_previous_density, temporary_previous_temperature, temporary_previous_velocity_x, temporary_previous_velocity_y, temporary_previous_velocity_z, temporary_pressure, temporary_divergence, temporary_omega_x,
                              temporary_omega_y, temporary_omega_z, temporary_omega_magnitude, temporary_force_x, temporary_force_y, temporary_force_z, dt, ambient_temperature, density_buoyancy, temperature_buoyancy, vorticity_epsilon, pressure_iterations, block_x, block_y, block_z, use_monotonic_cubic, stream),
                 "visual_simulation_of_smoke_step_async")) {

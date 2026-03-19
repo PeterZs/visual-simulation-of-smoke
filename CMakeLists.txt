@@ -33,6 +33,7 @@ add_library(
 add_executable(
         visual-simulation-of-smoke-app
         main.cpp
+        demo_ops.cu
 )
 
 target_compile_definitions(visual-simulation-of-smoke PRIVATE VISUAL_SIMULATION_OF_SMOKE_BUILD_SHARED)
@@ -46,14 +47,19 @@ target_link_libraries(visual-simulation-of-smoke-app PRIVATE visual-simulation-o
 # ============================================================================
 if (MSVC)
     target_compile_options(visual-simulation-of-smoke PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive->)
-    target_compile_options(visual-simulation-of-smoke-app PRIVATE /W4 /permissive-)
+    target_compile_options(visual-simulation-of-smoke-app PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive->)
 else ()
     target_compile_options(visual-simulation-of-smoke PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>)
-    target_compile_options(visual-simulation-of-smoke-app PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(visual-simulation-of-smoke-app PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>)
 endif ()
 
 target_compile_options(
         visual-simulation-of-smoke
+        PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda --expt-relaxed-constexpr>
+)
+target_compile_options(
+        visual-simulation-of-smoke-app
         PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda --expt-relaxed-constexpr>
 )

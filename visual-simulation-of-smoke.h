@@ -27,7 +27,6 @@ Error code scheme:
 1002  : invalid cell size
 1003  : invalid dt
 1004  : invalid iteration count
-1005  : invalid source radius
 2xxx  : buffer errors
 2001  : invalid density buffer
 2002  : invalid temperature buffer
@@ -51,16 +50,6 @@ Error code scheme:
 5xxx  : CUDA runtime or kernel launch failure
 5001  : CUDA call failed
 */
-
-VISUAL_SIMULATION_OF_SMOKE_API uint64_t visual_simulation_of_smoke_scalar_field_bytes(int32_t nx, int32_t ny, int32_t nz);
-VISUAL_SIMULATION_OF_SMOKE_API uint64_t visual_simulation_of_smoke_velocity_x_bytes(int32_t nx, int32_t ny, int32_t nz);
-VISUAL_SIMULATION_OF_SMOKE_API uint64_t visual_simulation_of_smoke_velocity_y_bytes(int32_t nx, int32_t ny, int32_t nz);
-VISUAL_SIMULATION_OF_SMOKE_API uint64_t visual_simulation_of_smoke_velocity_z_bytes(int32_t nx, int32_t ny, int32_t nz);
-
-VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_clear_async(void* density, void* temperature, void* velocity_x, void* velocity_y, void* velocity_z, int32_t nx, int32_t ny, int32_t nz, void* cuda_stream);
-
-VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_add_source_async(void* density, void* temperature, void* velocity_x, void* velocity_y, void* velocity_z, int32_t nx, int32_t ny, int32_t nz, float center_x, float center_y, float center_z, float radius, float density_amount, float temperature_amount, float velocity_source_x,
-    float velocity_source_y, float velocity_source_z, int32_t block_x, int32_t block_y, int32_t block_z, void* cuda_stream);
 
 VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_step_async(void* density, void* temperature, void* velocity_x, void* velocity_y, void* velocity_z, int32_t nx, int32_t ny, int32_t nz, float cell_size, void* temporary_previous_density, void* temporary_previous_temperature, void* temporary_previous_velocity_x,
     void* temporary_previous_velocity_y, void* temporary_previous_velocity_z, void* temporary_pressure, void* temporary_divergence, void* temporary_omega_x, void* temporary_omega_y, void* temporary_omega_z, void* temporary_omega_magnitude, void* temporary_force_x, void* temporary_force_y, void* temporary_force_z, float dt, float ambient_temperature,
