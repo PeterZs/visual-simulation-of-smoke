@@ -1,18 +1,14 @@
 #include "visual-simulation-of-smoke.h"
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cuda_runtime.h>
+#include <iomanip>
 #include <iostream>
 #include <numeric>
 #include <vector>
 
-#include <nvtx3/nvtx3.hpp>
-
 namespace {
-
-    int32_t cuda_code(const cudaError_t status) noexcept {
-        return status == cudaSuccess ? 0 : 5001;
-    }
 
     dim3 make_grid(const int nx, const int ny, const int nz, const dim3& block) {
         return dim3(static_cast<unsigned>((nx + static_cast<int>(block.x) - 1) / static_cast<int>(block.x)), static_cast<unsigned>((ny + static_cast<int>(block.y) - 1) / static_cast<int>(block.y)), static_cast<unsigned>((nz + static_cast<int>(block.z) - 1) / static_cast<int>(block.z)));
@@ -86,28 +82,9 @@ namespace {
         velocity_z[index_3d(x, y, z, nx, ny)] += amount * fmaxf(0.0f, 1.0f - dist2 / radius2);
     }
 
-    int32_t visual_demo_add_source_async(void* density, void* temperature, void* velocity_x, void* velocity_y, void* velocity_z, int32_t nx, int32_t ny, int32_t nz, float center_x, float center_y, float center_z, float radius, float density_amount, float temperature_amount, float velocity_source_x, float velocity_source_y,
-        float velocity_source_z, int32_t block_x, int32_t block_y, int32_t block_z, void* cuda_stream) {
-        if (nx <= 0 || ny <= 0 || nz <= 0) return 1001;
-        if (radius <= 0.0f) return 1005;
-        if (density == nullptr) return 2001;
-        if (temperature == nullptr) return 2002;
-        if (velocity_x == nullptr) return 2003;
-        if (velocity_y == nullptr) return 2004;
-        if (velocity_z == nullptr) return 2005;
-
-        const dim3 block{static_cast<unsigned>(std::max(block_x, 1)), static_cast<unsigned>(std::max(block_y, 1)), static_cast<unsigned>(std::max(block_z, 1))};
-        source_cells_kernel<<<make_grid(nx, ny, nz, block), block, 0, reinterpret_cast<cudaStream_t>(cuda_stream)>>>(reinterpret_cast<float*>(density), reinterpret_cast<float*>(temperature), nx, ny, nz, center_x, center_y, center_z, radius, density_amount, temperature_amount);
-        source_u_kernel<<<make_grid(nx + 1, ny, nz, block), block, 0, reinterpret_cast<cudaStream_t>(cuda_stream)>>>(reinterpret_cast<float*>(velocity_x), nx, ny, nz, center_x, center_y, center_z, radius, velocity_source_x);
-        source_v_kernel<<<make_grid(nx, ny + 1, nz, block), block, 0, reinterpret_cast<cudaStream_t>(cuda_stream)>>>(reinterpret_cast<float*>(velocity_y), nx, ny, nz, center_x, center_y, center_z, radius, velocity_source_y);
-        source_w_kernel<<<make_grid(nx, ny, nz + 1, block), block, 0, reinterpret_cast<cudaStream_t>(cuda_stream)>>>(reinterpret_cast<float*>(velocity_z), nx, ny, nz, center_x, center_y, center_z, radius, velocity_source_z);
-        return cuda_code(cudaGetLastError());
-    }
-
 } // namespace
 
 int main() {
-    nvtx3::scoped_range app_range{"vsmoke.demo"};
     auto cuda_ok = [](const cudaError_t status, const char* what) {
         if (status == cudaSuccess) return true;
         std::cerr << what << " failed: " << cudaGetErrorString(status) << '\n';
@@ -133,11 +110,144 @@ int main() {
     constexpr int32_t block_y              = 8;
     constexpr int32_t block_z              = 4;
     constexpr uint32_t use_monotonic_cubic = 1u;
+    constexpr int32_t frames               = 16;
 
-    const uint64_t scalar_bytes           = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz) * sizeof(float);
-    const uint64_t velocity_x_bytes       = static_cast<uint64_t>(nx + 1) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz) * sizeof(float);
-    const uint64_t velocity_y_bytes       = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny + 1) * static_cast<uint64_t>(nz) * sizeof(float);
-    const uint64_t velocity_z_bytes       = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz + 1) * sizeof(float);
+    const uint64_t scalar_bytes    = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz) * sizeof(float);
+    const uint64_t velocity_x_bytes = static_cast<uint64_t>(nx + 1) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz) * sizeof(float);
+    const uint64_t velocity_y_bytes = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny + 1) * static_cast<uint64_t>(nz) * sizeof(float);
+    const uint64_t velocity_z_bytes = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz + 1) * sizeof(float);
+    const std::size_t scalar_count = static_cast<std::size_t>(scalar_bytes / sizeof(float));
+    const std::size_t vx_count = static_cast<std::size_t>(velocity_x_bytes / sizeof(float));
+    const std::size_t vy_count = static_cast<std::size_t>(velocity_y_bytes / sizeof(float));
+    const std::size_t vz_count = static_cast<std::size_t>(velocity_z_bytes / sizeof(float));
+
+    std::vector<float> cpu_density(scalar_count, 0.0f);
+    std::vector<float> cpu_temperature(scalar_count, 0.0f);
+    std::vector<float> cpu_velocity_x(vx_count, 0.0f);
+    std::vector<float> cpu_velocity_y(vy_count, 0.0f);
+    std::vector<float> cpu_velocity_z(vz_count, 0.0f);
+    std::vector<float> cpu_temporary_previous_density(scalar_count, 0.0f);
+    std::vector<float> cpu_temporary_previous_temperature(scalar_count, 0.0f);
+    std::vector<float> cpu_temporary_previous_velocity_x(vx_count, 0.0f);
+    std::vector<float> cpu_temporary_previous_velocity_y(vy_count, 0.0f);
+    std::vector<float> cpu_temporary_previous_velocity_z(vz_count, 0.0f);
+    std::vector<float> cpu_temporary_pressure(scalar_count, 0.0f);
+    std::vector<float> cpu_temporary_divergence(scalar_count, 0.0f);
+    std::vector<float> cpu_temporary_omega_x(scalar_count, 0.0f);
+    std::vector<float> cpu_temporary_omega_y(scalar_count, 0.0f);
+    std::vector<float> cpu_temporary_omega_z(scalar_count, 0.0f);
+    std::vector<float> cpu_temporary_omega_magnitude(scalar_count, 0.0f);
+    std::vector<float> cpu_temporary_force_x(scalar_count, 0.0f);
+    std::vector<float> cpu_temporary_force_y(scalar_count, 0.0f);
+    std::vector<float> cpu_temporary_force_z(scalar_count, 0.0f);
+
+    auto add_source_cpu = [&](std::vector<float>& density, std::vector<float>& temperature, std::vector<float>& velocity_x, std::vector<float>& velocity_y, std::vector<float>& velocity_z) {
+        const float center_x = static_cast<float>(nx) * 0.5f;
+        const float center_y = static_cast<float>(ny) * 0.18f;
+        const float center_z = static_cast<float>(nz) * 0.5f;
+        const float radius = 4.5f;
+        const float radius2 = radius * radius;
+        for (int z = 0; z < nz; ++z) {
+            for (int y = 0; y < ny; ++y) {
+                for (int x = 0; x < nx; ++x) {
+                    const float dx = (static_cast<float>(x) + 0.5f) - center_x;
+                    const float dy = (static_cast<float>(y) + 0.5f) - center_y;
+                    const float dz = (static_cast<float>(z) + 0.5f) - center_z;
+                    const float dist2 = dx * dx + dy * dy + dz * dz;
+                    if (dist2 > radius2) continue;
+                    const float weight = std::max(0.0f, 1.0f - dist2 / radius2);
+                    const std::size_t index = static_cast<std::size_t>(z) * static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) + static_cast<std::size_t>(y) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(x);
+                    density[index] += 0.85f * weight;
+                    temperature[index] += 1.35f * weight;
+                }
+            }
+        }
+        for (int z = 0; z < nz; ++z) {
+            for (int y = 0; y < ny; ++y) {
+                for (int x = 0; x <= nx; ++x) {
+                    const float dx = static_cast<float>(x) - center_x;
+                    const float dy = (static_cast<float>(y) + 0.5f) - center_y;
+                    const float dz = (static_cast<float>(z) + 0.5f) - center_z;
+                    const float dist2 = dx * dx + dy * dy + dz * dz;
+                    if (dist2 > radius2) continue;
+                    velocity_x[static_cast<std::size_t>(z) * static_cast<std::size_t>(nx + 1) * static_cast<std::size_t>(ny) + static_cast<std::size_t>(y) * static_cast<std::size_t>(nx + 1) + static_cast<std::size_t>(x)] += 0.0f;
+                }
+            }
+        }
+        for (int z = 0; z < nz; ++z) {
+            for (int y = 0; y <= ny; ++y) {
+                for (int x = 0; x < nx; ++x) {
+                    const float dx = (static_cast<float>(x) + 0.5f) - center_x;
+                    const float dy = static_cast<float>(y) - center_y;
+                    const float dz = (static_cast<float>(z) + 0.5f) - center_z;
+                    const float dist2 = dx * dx + dy * dy + dz * dz;
+                    if (dist2 > radius2) continue;
+                    velocity_y[static_cast<std::size_t>(z) * static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny + 1) + static_cast<std::size_t>(y) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(x)] += 1.2f * std::max(0.0f, 1.0f - dist2 / radius2);
+                }
+            }
+        }
+        for (int z = 0; z <= nz; ++z) {
+            for (int y = 0; y < ny; ++y) {
+                for (int x = 0; x < nx; ++x) {
+                    const float dx = (static_cast<float>(x) + 0.5f) - center_x;
+                    const float dy = (static_cast<float>(y) + 0.5f) - center_y;
+                    const float dz = static_cast<float>(z) - center_z;
+                    const float dist2 = dx * dx + dy * dy + dz * dz;
+                    if (dist2 > radius2) continue;
+                    velocity_z[static_cast<std::size_t>(z) * static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) + static_cast<std::size_t>(y) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(x)] += 0.0f;
+                }
+            }
+        }
+    };
+
+    const auto cpu_begin = std::chrono::steady_clock::now();
+    for (int frame = 0; frame < frames; ++frame) {
+        add_source_cpu(cpu_density, cpu_temperature, cpu_velocity_x, cpu_velocity_y, cpu_velocity_z);
+
+        VisualSimulationOfSmokeStepDesc cpu_desc{};
+        cpu_desc.struct_size                    = sizeof(VisualSimulationOfSmokeStepDesc);
+        cpu_desc.api_version                    = 1;
+        cpu_desc.nx                             = nx;
+        cpu_desc.ny                             = ny;
+        cpu_desc.nz                             = nz;
+        cpu_desc.cell_size                      = cell_size;
+        cpu_desc.dt                             = dt;
+        cpu_desc.ambient_temperature            = ambient_temperature;
+        cpu_desc.density_buoyancy               = density_buoyancy;
+        cpu_desc.temperature_buoyancy           = temperature_buoyancy;
+        cpu_desc.vorticity_epsilon              = vorticity_epsilon;
+        cpu_desc.pressure_iterations            = pressure_iterations;
+        cpu_desc.use_monotonic_cubic            = use_monotonic_cubic;
+        cpu_desc.density                        = cpu_density.data();
+        cpu_desc.temperature                    = cpu_temperature.data();
+        cpu_desc.velocity_x                     = cpu_velocity_x.data();
+        cpu_desc.velocity_y                     = cpu_velocity_y.data();
+        cpu_desc.velocity_z                     = cpu_velocity_z.data();
+        cpu_desc.temporary_previous_density     = cpu_temporary_previous_density.data();
+        cpu_desc.temporary_previous_temperature = cpu_temporary_previous_temperature.data();
+        cpu_desc.temporary_previous_velocity_x  = cpu_temporary_previous_velocity_x.data();
+        cpu_desc.temporary_previous_velocity_y  = cpu_temporary_previous_velocity_y.data();
+        cpu_desc.temporary_previous_velocity_z  = cpu_temporary_previous_velocity_z.data();
+        cpu_desc.temporary_pressure             = cpu_temporary_pressure.data();
+        cpu_desc.temporary_divergence           = cpu_temporary_divergence.data();
+        cpu_desc.temporary_omega_x              = cpu_temporary_omega_x.data();
+        cpu_desc.temporary_omega_y              = cpu_temporary_omega_y.data();
+        cpu_desc.temporary_omega_z              = cpu_temporary_omega_z.data();
+        cpu_desc.temporary_omega_magnitude      = cpu_temporary_omega_magnitude.data();
+        cpu_desc.temporary_force_x              = cpu_temporary_force_x.data();
+        cpu_desc.temporary_force_y              = cpu_temporary_force_y.data();
+        cpu_desc.temporary_force_z              = cpu_temporary_force_z.data();
+        cpu_desc.block_x                        = block_x;
+        cpu_desc.block_y                        = block_y;
+        cpu_desc.block_z                        = block_z;
+        cpu_desc.stream                         = nullptr;
+        if (!smoke_ok(visual_simulation_of_smoke_step_cpu(&cpu_desc), "visual_simulation_of_smoke_step_cpu")) return EXIT_FAILURE;
+    }
+    const auto cpu_end = std::chrono::steady_clock::now();
+
+    const float cpu_total_density = std::accumulate(cpu_density.begin(), cpu_density.end(), 0.0f);
+    const float cpu_peak_density  = cpu_density.empty() ? 0.0f : *std::max_element(cpu_density.begin(), cpu_density.end());
+
     float* density                        = nullptr;
     float* temperature                    = nullptr;
     float* velocity_x                     = nullptr;
@@ -158,104 +268,95 @@ int main() {
     float* temporary_force_y              = nullptr;
     float* temporary_force_z              = nullptr;
     cudaStream_t stream                   = nullptr;
+    int exit_code                         = EXIT_SUCCESS;
 
-    if (!cuda_ok(cudaMalloc(reinterpret_cast<void**>(&density), scalar_bytes), "cudaMalloc density") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temperature), scalar_bytes), "cudaMalloc temperature") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&velocity_x), velocity_x_bytes), "cudaMalloc velocity_x")
-        || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&velocity_y), velocity_y_bytes), "cudaMalloc velocity_y") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&velocity_z), velocity_z_bytes), "cudaMalloc velocity_z") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_previous_density), scalar_bytes), "cudaMalloc temporary_previous_density")
-        || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_previous_temperature), scalar_bytes), "cudaMalloc temporary_previous_temperature") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_previous_velocity_x), velocity_x_bytes), "cudaMalloc temporary_previous_velocity_x")
-        || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_previous_velocity_y), velocity_y_bytes), "cudaMalloc temporary_previous_velocity_y") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_previous_velocity_z), velocity_z_bytes), "cudaMalloc temporary_previous_velocity_z")
-        || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_pressure), scalar_bytes), "cudaMalloc temporary_pressure") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_divergence), scalar_bytes), "cudaMalloc temporary_divergence")
-        || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_omega_x), scalar_bytes), "cudaMalloc temporary_omega_x") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_omega_y), scalar_bytes), "cudaMalloc temporary_omega_y") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_omega_z), scalar_bytes), "cudaMalloc temporary_omega_z")
-        || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_omega_magnitude), scalar_bytes), "cudaMalloc temporary_omega_magnitude") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_force_x), scalar_bytes), "cudaMalloc temporary_force_x")
-        || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_force_y), scalar_bytes), "cudaMalloc temporary_force_y") || !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_force_z), scalar_bytes), "cudaMalloc temporary_force_z") || !cuda_ok(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags")) {
-        cudaFree(density);
-        cudaFree(temperature);
-        cudaFree(velocity_x);
-        cudaFree(velocity_y);
-        cudaFree(velocity_z);
-        cudaFree(temporary_previous_density);
-        cudaFree(temporary_previous_temperature);
-        cudaFree(temporary_previous_velocity_x);
-        cudaFree(temporary_previous_velocity_y);
-        cudaFree(temporary_previous_velocity_z);
-        cudaFree(temporary_pressure);
-        cudaFree(temporary_divergence);
-        cudaFree(temporary_omega_x);
-        cudaFree(temporary_omega_y);
-        cudaFree(temporary_omega_z);
-        cudaFree(temporary_omega_magnitude);
-        cudaFree(temporary_force_x);
-        cudaFree(temporary_force_y);
-        cudaFree(temporary_force_z);
-        if (stream != nullptr) cudaStreamDestroy(stream);
-        return EXIT_FAILURE;
+    if (!cuda_ok(cudaMalloc(reinterpret_cast<void**>(&density), scalar_bytes), "cudaMalloc density")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temperature), scalar_bytes), "cudaMalloc temperature")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&velocity_x), velocity_x_bytes), "cudaMalloc velocity_x")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&velocity_y), velocity_y_bytes), "cudaMalloc velocity_y")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&velocity_z), velocity_z_bytes), "cudaMalloc velocity_z")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_previous_density), scalar_bytes), "cudaMalloc temporary_previous_density")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_previous_temperature), scalar_bytes), "cudaMalloc temporary_previous_temperature")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_previous_velocity_x), velocity_x_bytes), "cudaMalloc temporary_previous_velocity_x")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_previous_velocity_y), velocity_y_bytes), "cudaMalloc temporary_previous_velocity_y")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_previous_velocity_z), velocity_z_bytes), "cudaMalloc temporary_previous_velocity_z")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_pressure), scalar_bytes), "cudaMalloc temporary_pressure")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_divergence), scalar_bytes), "cudaMalloc temporary_divergence")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_omega_x), scalar_bytes), "cudaMalloc temporary_omega_x")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_omega_y), scalar_bytes), "cudaMalloc temporary_omega_y")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_omega_z), scalar_bytes), "cudaMalloc temporary_omega_z")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_omega_magnitude), scalar_bytes), "cudaMalloc temporary_omega_magnitude")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_force_x), scalar_bytes), "cudaMalloc temporary_force_x")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_force_y), scalar_bytes), "cudaMalloc temporary_force_y")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMalloc(reinterpret_cast<void**>(&temporary_force_z), scalar_bytes), "cudaMalloc temporary_force_z")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags")) exit_code = EXIT_FAILURE;
+
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMemsetAsync(density, 0, scalar_bytes, stream), "cudaMemsetAsync density")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMemsetAsync(temperature, 0, scalar_bytes, stream), "cudaMemsetAsync temperature")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMemsetAsync(velocity_x, 0, velocity_x_bytes, stream), "cudaMemsetAsync velocity_x")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMemsetAsync(velocity_y, 0, velocity_y_bytes, stream), "cudaMemsetAsync velocity_y")) exit_code = EXIT_FAILURE;
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMemsetAsync(velocity_z, 0, velocity_z_bytes, stream), "cudaMemsetAsync velocity_z")) exit_code = EXIT_FAILURE;
+
+    const auto cuda_begin = std::chrono::steady_clock::now();
+    for (int frame = 0; exit_code == EXIT_SUCCESS && frame < frames; ++frame) {
+        const dim3 block{static_cast<unsigned>(block_x), static_cast<unsigned>(block_y), static_cast<unsigned>(block_z)};
+        source_cells_kernel<<<make_grid(nx, ny, nz, block), block, 0, stream>>>(density, temperature, nx, ny, nz, static_cast<float>(nx) * 0.5f, static_cast<float>(ny) * 0.18f, static_cast<float>(nz) * 0.5f, 4.5f, 0.85f, 1.35f);
+        source_u_kernel<<<make_grid(nx + 1, ny, nz, block), block, 0, stream>>>(velocity_x, nx, ny, nz, static_cast<float>(nx) * 0.5f, static_cast<float>(ny) * 0.18f, static_cast<float>(nz) * 0.5f, 4.5f, 0.0f);
+        source_v_kernel<<<make_grid(nx, ny + 1, nz, block), block, 0, stream>>>(velocity_y, nx, ny, nz, static_cast<float>(nx) * 0.5f, static_cast<float>(ny) * 0.18f, static_cast<float>(nz) * 0.5f, 4.5f, 1.2f);
+        source_w_kernel<<<make_grid(nx, ny, nz + 1, block), block, 0, stream>>>(velocity_z, nx, ny, nz, static_cast<float>(nx) * 0.5f, static_cast<float>(ny) * 0.18f, static_cast<float>(nz) * 0.5f, 4.5f, 0.0f);
+        if (!cuda_ok(cudaGetLastError(), "source kernels")) exit_code = EXIT_FAILURE;
+
+        VisualSimulationOfSmokeStepDesc cuda_desc{};
+        cuda_desc.struct_size                    = sizeof(VisualSimulationOfSmokeStepDesc);
+        cuda_desc.api_version                    = 1;
+        cuda_desc.nx                             = nx;
+        cuda_desc.ny                             = ny;
+        cuda_desc.nz                             = nz;
+        cuda_desc.cell_size                      = cell_size;
+        cuda_desc.dt                             = dt;
+        cuda_desc.ambient_temperature            = ambient_temperature;
+        cuda_desc.density_buoyancy               = density_buoyancy;
+        cuda_desc.temperature_buoyancy           = temperature_buoyancy;
+        cuda_desc.vorticity_epsilon              = vorticity_epsilon;
+        cuda_desc.pressure_iterations            = pressure_iterations;
+        cuda_desc.use_monotonic_cubic            = use_monotonic_cubic;
+        cuda_desc.density                        = density;
+        cuda_desc.temperature                    = temperature;
+        cuda_desc.velocity_x                     = velocity_x;
+        cuda_desc.velocity_y                     = velocity_y;
+        cuda_desc.velocity_z                     = velocity_z;
+        cuda_desc.temporary_previous_density     = temporary_previous_density;
+        cuda_desc.temporary_previous_temperature = temporary_previous_temperature;
+        cuda_desc.temporary_previous_velocity_x  = temporary_previous_velocity_x;
+        cuda_desc.temporary_previous_velocity_y  = temporary_previous_velocity_y;
+        cuda_desc.temporary_previous_velocity_z  = temporary_previous_velocity_z;
+        cuda_desc.temporary_pressure             = temporary_pressure;
+        cuda_desc.temporary_divergence           = temporary_divergence;
+        cuda_desc.temporary_omega_x              = temporary_omega_x;
+        cuda_desc.temporary_omega_y              = temporary_omega_y;
+        cuda_desc.temporary_omega_z              = temporary_omega_z;
+        cuda_desc.temporary_omega_magnitude      = temporary_omega_magnitude;
+        cuda_desc.temporary_force_x              = temporary_force_x;
+        cuda_desc.temporary_force_y              = temporary_force_y;
+        cuda_desc.temporary_force_z              = temporary_force_z;
+        cuda_desc.block_x                        = block_x;
+        cuda_desc.block_y                        = block_y;
+        cuda_desc.block_z                        = block_z;
+        cuda_desc.stream                         = stream;
+        if (exit_code == EXIT_SUCCESS && !smoke_ok(visual_simulation_of_smoke_step_cuda(&cuda_desc), "visual_simulation_of_smoke_step_cuda")) exit_code = EXIT_FAILURE;
     }
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize")) exit_code = EXIT_FAILURE;
+    const auto cuda_end = std::chrono::steady_clock::now();
 
-    if (!cuda_ok(cudaMemsetAsync(density, 0, scalar_bytes, stream), "cudaMemsetAsync density") || !cuda_ok(cudaMemsetAsync(temperature, 0, scalar_bytes, stream), "cudaMemsetAsync temperature") || !cuda_ok(cudaMemsetAsync(velocity_x, 0, velocity_x_bytes, stream), "cudaMemsetAsync velocity_x")
-        || !cuda_ok(cudaMemsetAsync(velocity_y, 0, velocity_y_bytes, stream), "cudaMemsetAsync velocity_y") || !cuda_ok(cudaMemsetAsync(velocity_z, 0, velocity_z_bytes, stream), "cudaMemsetAsync velocity_z")) {
-        return EXIT_FAILURE;
+    std::vector<float> host_density(scalar_count, 0.0f);
+    if (exit_code == EXIT_SUCCESS && !cuda_ok(cudaMemcpy(host_density.data(), density, scalar_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy density")) exit_code = EXIT_FAILURE;
+
+    const float cuda_total_density = exit_code == EXIT_SUCCESS ? std::accumulate(host_density.begin(), host_density.end(), 0.0f) : 0.0f;
+    const float cuda_peak_density  = exit_code == EXIT_SUCCESS && !host_density.empty() ? *std::max_element(host_density.begin(), host_density.end()) : 0.0f;
+    float density_l1_diff          = 0.0f;
+    if (exit_code == EXIT_SUCCESS) {
+        for (std::size_t i = 0; i < scalar_count; ++i) density_l1_diff += std::abs(cpu_density[i] - host_density[i]);
     }
-
-    for (int frame = 0; frame < 16; ++frame) {
-        nvtx3::scoped_range frame_range{"vsmoke.demo.frame"};
-        VisualSimulationOfSmokeStepDesc step_desc{};
-        step_desc.struct_size                    = sizeof(VisualSimulationOfSmokeStepDesc);
-        step_desc.api_version                    = 1;
-        step_desc.nx                             = nx;
-        step_desc.ny                             = ny;
-        step_desc.nz                             = nz;
-        step_desc.cell_size                      = cell_size;
-        step_desc.dt                             = dt;
-        step_desc.ambient_temperature            = ambient_temperature;
-        step_desc.density_buoyancy               = density_buoyancy;
-        step_desc.temperature_buoyancy           = temperature_buoyancy;
-        step_desc.vorticity_epsilon              = vorticity_epsilon;
-        step_desc.pressure_iterations            = pressure_iterations;
-        step_desc.use_monotonic_cubic            = use_monotonic_cubic;
-        step_desc.density                        = density;
-        step_desc.temperature                    = temperature;
-        step_desc.velocity_x                     = velocity_x;
-        step_desc.velocity_y                     = velocity_y;
-        step_desc.velocity_z                     = velocity_z;
-        step_desc.temporary_previous_density     = temporary_previous_density;
-        step_desc.temporary_previous_temperature = temporary_previous_temperature;
-        step_desc.temporary_previous_velocity_x  = temporary_previous_velocity_x;
-        step_desc.temporary_previous_velocity_y  = temporary_previous_velocity_y;
-        step_desc.temporary_previous_velocity_z  = temporary_previous_velocity_z;
-        step_desc.temporary_pressure             = temporary_pressure;
-        step_desc.temporary_divergence           = temporary_divergence;
-        step_desc.temporary_omega_x              = temporary_omega_x;
-        step_desc.temporary_omega_y              = temporary_omega_y;
-        step_desc.temporary_omega_z              = temporary_omega_z;
-        step_desc.temporary_omega_magnitude      = temporary_omega_magnitude;
-        step_desc.temporary_force_x              = temporary_force_x;
-        step_desc.temporary_force_y              = temporary_force_y;
-        step_desc.temporary_force_z              = temporary_force_z;
-        step_desc.block_x                        = block_x;
-        step_desc.block_y                        = block_y;
-        step_desc.block_z                        = block_z;
-        step_desc.stream                         = stream;
-        if (!smoke_ok(visual_demo_add_source_async(density, temperature, velocity_x, velocity_y, velocity_z, nx, ny, nz, static_cast<float>(nx) * 0.5f, static_cast<float>(ny) * 0.18f, static_cast<float>(nz) * 0.5f, 4.5f, 0.85f, 1.35f, 0.0f, 1.2f, 0.0f, block_x, block_y, block_z, stream), "visual_demo_add_source_async")
-            || !smoke_ok(visual_simulation_of_smoke_step_cuda(&step_desc), "visual_simulation_of_smoke_step_cuda")) {
-            return EXIT_FAILURE;
-        }
-    }
-
-    if (!cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize")) {
-        return EXIT_FAILURE;
-    }
-
-    std::vector<float> host_density(static_cast<size_t>(scalar_bytes / sizeof(float)), 0.0f);
-    if (!cuda_ok(cudaMemcpy(host_density.data(), density, scalar_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy density")) {
-        return EXIT_FAILURE;
-    }
-
-    const float total_density = std::accumulate(host_density.begin(), host_density.end(), 0.0f);
-    const float peak_density  = host_density.empty() ? 0.0f : *std::max_element(host_density.begin(), host_density.end());
-
-    std::cout << "visual-simulation-of-smoke-app\n";
-    std::cout << "grid: " << nx << " x " << ny << " x " << nz << '\n';
-    std::cout << "total density: " << total_density << '\n';
-    std::cout << "peak density: " << peak_density << '\n';
 
     cudaStreamDestroy(stream);
     cudaFree(density);
@@ -277,5 +378,24 @@ int main() {
     cudaFree(temporary_force_x);
     cudaFree(temporary_force_y);
     cudaFree(temporary_force_z);
+    if (exit_code != EXIT_SUCCESS) return exit_code;
+
+    const double cpu_ms = std::chrono::duration<double, std::milli>(cpu_end - cpu_begin).count();
+    const double cuda_ms = std::chrono::duration<double, std::milli>(cuda_end - cuda_begin).count();
+
+    std::cout << std::fixed << std::setprecision(3);
+    std::cout << "visual-simulation-of-smoke benchmark\n";
+    std::cout << "grid: " << nx << " x " << ny << " x " << nz << '\n';
+    std::cout << "frames: " << frames << '\n';
+    std::cout << "cpu_total_ms: " << cpu_ms << '\n';
+    std::cout << "cpu_step_ms: " << cpu_ms / static_cast<double>(frames) << '\n';
+    std::cout << "cpu_total_density: " << cpu_total_density << '\n';
+    std::cout << "cpu_peak_density: " << cpu_peak_density << '\n';
+    std::cout << "cuda_total_ms: " << cuda_ms << '\n';
+    std::cout << "cuda_step_ms: " << cuda_ms / static_cast<double>(frames) << '\n';
+    std::cout << "cuda_total_density: " << cuda_total_density << '\n';
+    std::cout << "cuda_peak_density: " << cuda_peak_density << '\n';
+    std::cout << "density_l1_diff: " << density_l1_diff << '\n';
+    if (cuda_ms > 0.0) std::cout << "speedup: " << cpu_ms / cuda_ms << "x\n";
     return EXIT_SUCCESS;
 }
