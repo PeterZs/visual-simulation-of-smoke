@@ -102,10 +102,45 @@ int main() {
 
     for (int frame = 0; frame < 16; ++frame) {
         nvtx3::scoped_range frame_range{"vsmoke.demo.frame"};
+        VisualSimulationOfSmokeStepDesc step_desc{};
+        step_desc.struct_size                  = sizeof(VisualSimulationOfSmokeStepDesc);
+        step_desc.api_version                  = 1;
+        step_desc.nx                           = nx;
+        step_desc.ny                           = ny;
+        step_desc.nz                           = nz;
+        step_desc.cell_size                    = cell_size;
+        step_desc.dt                           = dt;
+        step_desc.ambient_temperature          = ambient_temperature;
+        step_desc.density_buoyancy             = density_buoyancy;
+        step_desc.temperature_buoyancy         = temperature_buoyancy;
+        step_desc.vorticity_epsilon            = vorticity_epsilon;
+        step_desc.pressure_iterations          = pressure_iterations;
+        step_desc.use_monotonic_cubic          = use_monotonic_cubic;
+        step_desc.density                      = density;
+        step_desc.temperature                  = temperature;
+        step_desc.velocity_x                   = velocity_x;
+        step_desc.velocity_y                   = velocity_y;
+        step_desc.velocity_z                   = velocity_z;
+        step_desc.temporary_previous_density   = temporary_previous_density;
+        step_desc.temporary_previous_temperature = temporary_previous_temperature;
+        step_desc.temporary_previous_velocity_x = temporary_previous_velocity_x;
+        step_desc.temporary_previous_velocity_y = temporary_previous_velocity_y;
+        step_desc.temporary_previous_velocity_z = temporary_previous_velocity_z;
+        step_desc.temporary_pressure           = temporary_pressure;
+        step_desc.temporary_divergence         = temporary_divergence;
+        step_desc.temporary_omega_x            = temporary_omega_x;
+        step_desc.temporary_omega_y            = temporary_omega_y;
+        step_desc.temporary_omega_z            = temporary_omega_z;
+        step_desc.temporary_omega_magnitude    = temporary_omega_magnitude;
+        step_desc.temporary_force_x            = temporary_force_x;
+        step_desc.temporary_force_y            = temporary_force_y;
+        step_desc.temporary_force_z            = temporary_force_z;
+        step_desc.block_x                      = block_x;
+        step_desc.block_y                      = block_y;
+        step_desc.block_z                      = block_z;
+        step_desc.stream                       = stream;
         if (!smoke_ok(visual_demo_add_source_async(density, temperature, velocity_x, velocity_y, velocity_z, nx, ny, nz, static_cast<float>(nx) * 0.5f, static_cast<float>(ny) * 0.18f, static_cast<float>(nz) * 0.5f, 4.5f, 0.85f, 1.35f, 0.0f, 1.2f, 0.0f, block_x, block_y, block_z, stream), "visual_demo_add_source_async")
-            || !smoke_ok(visual_simulation_of_smoke_step_async(density, temperature, velocity_x, velocity_y, velocity_z, nx, ny, nz, cell_size, temporary_previous_density, temporary_previous_temperature, temporary_previous_velocity_x, temporary_previous_velocity_y, temporary_previous_velocity_z, temporary_pressure, temporary_divergence, temporary_omega_x,
-                             temporary_omega_y, temporary_omega_z, temporary_omega_magnitude, temporary_force_x, temporary_force_y, temporary_force_z, dt, ambient_temperature, density_buoyancy, temperature_buoyancy, vorticity_epsilon, pressure_iterations, block_x, block_y, block_z, use_monotonic_cubic, stream),
-                "visual_simulation_of_smoke_step_async")) {
+            || !smoke_ok(visual_simulation_of_smoke_step_cuda(&step_desc), "visual_simulation_of_smoke_step_cuda")) {
             return EXIT_FAILURE;
         }
     }

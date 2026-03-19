@@ -27,7 +27,8 @@ add_library(
         visual-simulation-of-smoke
         SHARED
         visual-simulation-of-smoke.h
-        solver.cu
+        backend-cuda.cu
+        backend-cpu.cpp
 )
 
 add_executable(

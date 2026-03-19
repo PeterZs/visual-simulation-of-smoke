@@ -23,6 +23,7 @@ extern "C" {
 Error code scheme:
 0     : success
 1xxx  : scalar/grid/step parameter errors
+1000  : invalid step descriptor
 1001  : invalid grid dimensions
 1002  : invalid cell size
 1003  : invalid dt
@@ -47,13 +48,54 @@ Error code scheme:
 2018  : invalid temporary force_x buffer
 2019  : invalid temporary force_y buffer
 2020  : invalid temporary force_z buffer
+3xxx  : backend binding errors
+3002  : CPU backend requires stream == nullptr
+3003  : CUDA backend requires stream != nullptr
 5xxx  : CUDA runtime or kernel launch failure
 5001  : CUDA call failed
 */
 
-VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_step_async(void* density, void* temperature, void* velocity_x, void* velocity_y, void* velocity_z, int32_t nx, int32_t ny, int32_t nz, float cell_size, void* temporary_previous_density, void* temporary_previous_temperature, void* temporary_previous_velocity_x,
-    void* temporary_previous_velocity_y, void* temporary_previous_velocity_z, void* temporary_pressure, void* temporary_divergence, void* temporary_omega_x, void* temporary_omega_y, void* temporary_omega_z, void* temporary_omega_magnitude, void* temporary_force_x, void* temporary_force_y, void* temporary_force_z, float dt, float ambient_temperature,
-    float density_buoyancy, float temperature_buoyancy, float vorticity_epsilon, int32_t pressure_iterations, int32_t block_x, int32_t block_y, int32_t block_z, uint32_t use_monotonic_cubic, void* cuda_stream);
+typedef struct VisualSimulationOfSmokeStepDesc {
+    uint32_t struct_size;
+    uint32_t api_version;
+    int32_t nx;
+    int32_t ny;
+    int32_t nz;
+    float cell_size;
+    float dt;
+    float ambient_temperature;
+    float density_buoyancy;
+    float temperature_buoyancy;
+    float vorticity_epsilon;
+    int32_t pressure_iterations;
+    uint32_t use_monotonic_cubic;
+    void* density;
+    void* temperature;
+    void* velocity_x;
+    void* velocity_y;
+    void* velocity_z;
+    void* temporary_previous_density;
+    void* temporary_previous_temperature;
+    void* temporary_previous_velocity_x;
+    void* temporary_previous_velocity_y;
+    void* temporary_previous_velocity_z;
+    void* temporary_pressure;
+    void* temporary_divergence;
+    void* temporary_omega_x;
+    void* temporary_omega_y;
+    void* temporary_omega_z;
+    void* temporary_omega_magnitude;
+    void* temporary_force_x;
+    void* temporary_force_y;
+    void* temporary_force_z;
+    int32_t block_x;
+    int32_t block_y;
+    int32_t block_z;
+    void* stream;
+} VisualSimulationOfSmokeStepDesc;
+
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_step_cuda(const VisualSimulationOfSmokeStepDesc* desc);
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_step_cpu(const VisualSimulationOfSmokeStepDesc* desc);
 
 #ifdef __cplusplus
 }

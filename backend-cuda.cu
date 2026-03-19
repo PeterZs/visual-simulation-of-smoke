@@ -385,10 +385,25 @@ namespace {
 
 extern "C" {
 
-int32_t visual_simulation_of_smoke_step_async(void* density, void* temperature, void* velocity_x, void* velocity_y, void* velocity_z, int32_t nx, int32_t ny, int32_t nz, float cell_size, void* temporary_previous_density, void* temporary_previous_temperature, void* temporary_previous_velocity_x, void* temporary_previous_velocity_y,
-    void* temporary_previous_velocity_z, void* temporary_pressure, void* temporary_divergence, void* temporary_omega_x, void* temporary_omega_y, void* temporary_omega_z, void* temporary_omega_magnitude, void* temporary_force_x, void* temporary_force_y, void* temporary_force_z, float dt, float ambient_temperature, float density_buoyancy,
-    float temperature_buoyancy, float vorticity_epsilon, int32_t pressure_iterations, int32_t block_x, int32_t block_y, int32_t block_z, uint32_t use_monotonic_cubic, void* cuda_stream) {
+int32_t visual_simulation_of_smoke_step_cuda(const VisualSimulationOfSmokeStepDesc* desc) {
     using namespace visual_smoke;
+    if (desc == nullptr) return 1000;
+    if (desc->struct_size < sizeof(VisualSimulationOfSmokeStepDesc)) return 1000;
+    if (desc->stream == nullptr) return 3003;
+    const int32_t nx = desc->nx;
+    const int32_t ny = desc->ny;
+    const int32_t nz = desc->nz;
+    const float cell_size = desc->cell_size;
+    const float dt = desc->dt;
+    const float ambient_temperature = desc->ambient_temperature;
+    const float density_buoyancy = desc->density_buoyancy;
+    const float temperature_buoyancy = desc->temperature_buoyancy;
+    const float vorticity_epsilon = desc->vorticity_epsilon;
+    const int32_t pressure_iterations = desc->pressure_iterations;
+    const int32_t block_x = desc->block_x;
+    const int32_t block_y = desc->block_y;
+    const int32_t block_z = desc->block_z;
+    const uint32_t use_monotonic_cubic = desc->use_monotonic_cubic;
     if (nx <= 0 || ny <= 0 || nz <= 0) return 1001;
     if (cell_size <= 0.0f) return 1002;
     if (dt <= 0.0f) return 1003;
@@ -397,52 +412,52 @@ int32_t visual_simulation_of_smoke_step_async(void* density, void* temperature, 
     const auto u_bytes    = visual_smoke::velocity_x_bytes(nx, ny, nz);
     const auto v_bytes    = visual_smoke::velocity_y_bytes(nx, ny, nz);
     const auto w_bytes    = visual_smoke::velocity_z_bytes(nx, ny, nz);
-    if (density == nullptr) return 2001;
-    if (temperature == nullptr) return 2002;
-    if (velocity_x == nullptr) return 2003;
-    if (velocity_y == nullptr) return 2004;
-    if (velocity_z == nullptr) return 2005;
-    if (temporary_previous_density == nullptr) return 2007;
-    if (temporary_previous_temperature == nullptr) return 2008;
-    if (temporary_previous_velocity_x == nullptr) return 2009;
-    if (temporary_previous_velocity_y == nullptr) return 2010;
-    if (temporary_previous_velocity_z == nullptr) return 2011;
-    if (temporary_pressure == nullptr) return 2012;
-    if (temporary_divergence == nullptr) return 2013;
-    if (temporary_omega_x == nullptr) return 2014;
-    if (temporary_omega_y == nullptr) return 2015;
-    if (temporary_omega_z == nullptr) return 2016;
-    if (temporary_omega_magnitude == nullptr) return 2017;
-    if (temporary_force_x == nullptr) return 2018;
-    if (temporary_force_y == nullptr) return 2019;
-    if (temporary_force_z == nullptr) return 2020;
+    if (desc->density == nullptr) return 2001;
+    if (desc->temperature == nullptr) return 2002;
+    if (desc->velocity_x == nullptr) return 2003;
+    if (desc->velocity_y == nullptr) return 2004;
+    if (desc->velocity_z == nullptr) return 2005;
+    if (desc->temporary_previous_density == nullptr) return 2007;
+    if (desc->temporary_previous_temperature == nullptr) return 2008;
+    if (desc->temporary_previous_velocity_x == nullptr) return 2009;
+    if (desc->temporary_previous_velocity_y == nullptr) return 2010;
+    if (desc->temporary_previous_velocity_z == nullptr) return 2011;
+    if (desc->temporary_pressure == nullptr) return 2012;
+    if (desc->temporary_divergence == nullptr) return 2013;
+    if (desc->temporary_omega_x == nullptr) return 2014;
+    if (desc->temporary_omega_y == nullptr) return 2015;
+    if (desc->temporary_omega_z == nullptr) return 2016;
+    if (desc->temporary_omega_magnitude == nullptr) return 2017;
+    if (desc->temporary_force_x == nullptr) return 2018;
+    if (desc->temporary_force_y == nullptr) return 2019;
+    if (desc->temporary_force_z == nullptr) return 2020;
 
-    auto* density_prev     = reinterpret_cast<float*>(temporary_previous_density);
-    auto* temperature_prev = reinterpret_cast<float*>(temporary_previous_temperature);
-    auto* u_prev           = reinterpret_cast<float*>(temporary_previous_velocity_x);
-    auto* v_prev           = reinterpret_cast<float*>(temporary_previous_velocity_y);
-    auto* w_prev           = reinterpret_cast<float*>(temporary_previous_velocity_z);
-    auto* pressure         = reinterpret_cast<float*>(temporary_pressure);
-    auto* divergence       = reinterpret_cast<float*>(temporary_divergence);
-    auto* omega_x          = reinterpret_cast<float*>(temporary_omega_x);
-    auto* omega_y          = reinterpret_cast<float*>(temporary_omega_y);
-    auto* omega_z          = reinterpret_cast<float*>(temporary_omega_z);
-    auto* omega_mag        = reinterpret_cast<float*>(temporary_omega_magnitude);
-    auto* force_x          = reinterpret_cast<float*>(temporary_force_x);
-    auto* force_y          = reinterpret_cast<float*>(temporary_force_y);
-    auto* force_z          = reinterpret_cast<float*>(temporary_force_z);
-    auto* density_f        = reinterpret_cast<float*>(density);
-    auto* temperature_f    = reinterpret_cast<float*>(temperature);
-    auto* u                = reinterpret_cast<float*>(velocity_x);
-    auto* v                = reinterpret_cast<float*>(velocity_y);
-    auto* w                = reinterpret_cast<float*>(velocity_z);
+    auto* density_prev     = reinterpret_cast<float*>(desc->temporary_previous_density);
+    auto* temperature_prev = reinterpret_cast<float*>(desc->temporary_previous_temperature);
+    auto* u_prev           = reinterpret_cast<float*>(desc->temporary_previous_velocity_x);
+    auto* v_prev           = reinterpret_cast<float*>(desc->temporary_previous_velocity_y);
+    auto* w_prev           = reinterpret_cast<float*>(desc->temporary_previous_velocity_z);
+    auto* pressure         = reinterpret_cast<float*>(desc->temporary_pressure);
+    auto* divergence       = reinterpret_cast<float*>(desc->temporary_divergence);
+    auto* omega_x          = reinterpret_cast<float*>(desc->temporary_omega_x);
+    auto* omega_y          = reinterpret_cast<float*>(desc->temporary_omega_y);
+    auto* omega_z          = reinterpret_cast<float*>(desc->temporary_omega_z);
+    auto* omega_mag        = reinterpret_cast<float*>(desc->temporary_omega_magnitude);
+    auto* force_x          = reinterpret_cast<float*>(desc->temporary_force_x);
+    auto* force_y          = reinterpret_cast<float*>(desc->temporary_force_y);
+    auto* force_z          = reinterpret_cast<float*>(desc->temporary_force_z);
+    auto* density_f        = reinterpret_cast<float*>(desc->density);
+    auto* temperature_f    = reinterpret_cast<float*>(desc->temperature);
+    auto* u                = reinterpret_cast<float*>(desc->velocity_x);
+    auto* v                = reinterpret_cast<float*>(desc->velocity_y);
+    auto* w                = reinterpret_cast<float*>(desc->velocity_z);
     const dim3 block{static_cast<unsigned>(std::max(block_x, 1)), static_cast<unsigned>(std::max(block_y, 1)), static_cast<unsigned>(std::max(block_z, 1))};
     const dim3 cells  = make_grid(nx, ny, nz, block);
     const dim3 u_grid = make_grid(nx + 1, ny, nz, block);
     const dim3 v_grid = make_grid(nx, ny + 1, nz, block);
     const dim3 w_grid = make_grid(nx, ny, nz + 1, block);
     const bool cubic  = use_monotonic_cubic != 0u;
-    const auto stream = to_stream(cuda_stream);
+    const auto stream = to_stream(desc->stream);
 
     nvtx3::scoped_range step_range{"vsmoke.step"};
     {
