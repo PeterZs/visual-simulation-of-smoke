@@ -15,10 +15,7 @@
 #define VISUAL_SIMULATION_OF_SMOKE_API
 #endif
 
-#define VISUAL_SIMULATION_OF_SMOKE_SUCCESS                 0
-#define VISUAL_SIMULATION_OF_SMOKE_ERROR_INVALID_ARGUMENT  -1
-#define VISUAL_SIMULATION_OF_SMOKE_ERROR_RUNTIME           -2
-#define VISUAL_SIMULATION_OF_SMOKE_ERROR_ALLOCATION_FAILED -3
+#define VISUAL_SIMULATION_OF_SMOKE_SUCCESS 0
 
 #ifdef __cplusplus
 extern "C" {
@@ -122,8 +119,6 @@ VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_compute_veloci
     int32_t block_y,
     int32_t block_z,
     void* cuda_stream);
-
-VISUAL_SIMULATION_OF_SMOKE_API const char* visual_simulation_of_smoke_last_error(void);
 
 #ifdef __cplusplus
 }
