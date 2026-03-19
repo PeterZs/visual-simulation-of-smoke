@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <iostream>
+#include <nvtx3/nvtx3.hpp>
 #include <numeric>
 #include <vector>
 
@@ -49,6 +50,7 @@ VisualSimulationOfSmokeBufferView make_f32_device_buffer(void* data, uint64_t si
 } // namespace
 
 int main() {
+    nvtx3::scoped_range app_range{"vsmoke.demo"};
     VisualSimulationOfSmokeContextDesc desc = visual_simulation_of_smoke_context_desc_default();
     desc.nx = 48;
     desc.ny = 72;
@@ -90,6 +92,7 @@ int main() {
     }
 
     for (int frame = 0; frame < 16; ++frame) {
+        nvtx3::scoped_range frame_range{"vsmoke.demo.frame"};
         VisualSimulationOfSmokeSourceDesc source{
             .center_x = static_cast<float>(desc.nx) * 0.5f,
             .center_y = static_cast<float>(desc.ny) * 0.18f,
@@ -111,29 +114,35 @@ int main() {
         }
     }
 
-    if (!smoke_ok(visual_simulation_of_smoke_snapshot_density_async(context, make_f32_device_buffer(density, density_bytes), stream), "visual_simulation_of_smoke_snapshot_density_async", context) ||
-        !cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize")) {
-        cudaFree(density);
-        cudaStreamDestroy(stream);
-        visual_simulation_of_smoke_context_destroy(context);
-        return EXIT_FAILURE;
+    {
+        nvtx3::scoped_range snapshot_range{"vsmoke.demo.snapshot"};
+        if (!smoke_ok(visual_simulation_of_smoke_snapshot_density_async(context, make_f32_device_buffer(density, density_bytes), stream), "visual_simulation_of_smoke_snapshot_density_async", context) ||
+            !cuda_ok(cudaStreamSynchronize(stream), "cudaStreamSynchronize")) {
+            cudaFree(density);
+            cudaStreamDestroy(stream);
+            visual_simulation_of_smoke_context_destroy(context);
+            return EXIT_FAILURE;
+        }
     }
 
-    std::vector<float> host_density(static_cast<size_t>(density_bytes / sizeof(float)), 0.0f);
-    if (!cuda_ok(cudaMemcpy(host_density.data(), density, density_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy density")) {
-        cudaFree(density);
-        cudaStreamDestroy(stream);
-        visual_simulation_of_smoke_context_destroy(context);
-        return EXIT_FAILURE;
+    {
+        nvtx3::scoped_range copy_range{"vsmoke.demo.copy_to_host"};
+        std::vector<float> host_density(static_cast<size_t>(density_bytes / sizeof(float)), 0.0f);
+        if (!cuda_ok(cudaMemcpy(host_density.data(), density, density_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy density")) {
+            cudaFree(density);
+            cudaStreamDestroy(stream);
+            visual_simulation_of_smoke_context_destroy(context);
+            return EXIT_FAILURE;
+        }
+
+        const float total_density = std::accumulate(host_density.begin(), host_density.end(), 0.0f);
+        const float peak_density = host_density.empty() ? 0.0f : *std::max_element(host_density.begin(), host_density.end());
+
+        std::cout << "visual-simulation-of-smoke-app\n";
+        std::cout << "grid: " << desc.nx << " x " << desc.ny << " x " << desc.nz << '\n';
+        std::cout << "total density: " << total_density << '\n';
+        std::cout << "peak density: " << peak_density << '\n';
     }
-
-    const float total_density = std::accumulate(host_density.begin(), host_density.end(), 0.0f);
-    const float peak_density = host_density.empty() ? 0.0f : *std::max_element(host_density.begin(), host_density.end());
-
-    std::cout << "visual-simulation-of-smoke-app\n";
-    std::cout << "grid: " << desc.nx << " x " << desc.ny << " x " << desc.nz << '\n';
-    std::cout << "total density: " << total_density << '\n';
-    std::cout << "peak density: " << peak_density << '\n';
 
     cudaFree(density);
     cudaStreamDestroy(stream);

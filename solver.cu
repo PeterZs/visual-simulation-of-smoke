@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <nvtx3/nvtx3.hpp>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -598,6 +599,7 @@ namespace visual_smoke {
     }
 
     void Solver::clear(Stream stream) {
+        nvtx3::scoped_range range{"vsmoke.clear"};
         check_cuda(cudaMemsetAsync(density_, 0, cell_count_ * sizeof(float), stream), "cudaMemsetAsync density");
         check_cuda(cudaMemsetAsync(density_prev_, 0, cell_count_ * sizeof(float), stream), "cudaMemsetAsync density_prev");
         check_cuda(cudaMemsetAsync(temperature_, 0, cell_count_ * sizeof(float), stream), "cudaMemsetAsync temperature");
@@ -620,6 +622,7 @@ namespace visual_smoke {
     }
 
     void Solver::add_source(const Source& source, Stream stream) {
+        nvtx3::scoped_range range{"vsmoke.add_source"};
         if (source.radius <= 0.0f) {
             throw std::invalid_argument("source radius must be positive");
         }
@@ -638,6 +641,7 @@ namespace visual_smoke {
     }
 
     void Solver::step(Stream stream) {
+        nvtx3::scoped_range step_range{"vsmoke.step"};
         const dim3 block = make_block(desc_);
         const bool cubic = desc_.use_monotonic_cubic != 0u;
         const dim3 cells = make_grid(desc_.nx, desc_.ny, desc_.nz, block);
@@ -645,50 +649,64 @@ namespace visual_smoke {
         const dim3 v_grid = make_grid(desc_.nx, desc_.ny + 1, desc_.nz, block);
         const dim3 w_grid = make_grid(desc_.nx, desc_.ny, desc_.nz + 1, block);
 
-        compute_vorticity_kernel<<<cells, block, 0, stream>>>(u_, v_, w_, omega_x_, omega_y_, omega_z_, omega_mag_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size);
-        compute_confinement_kernel<<<cells, block, 0, stream>>>(omega_x_, omega_y_, omega_z_, omega_mag_, force_x_, force_y_, force_z_, desc_.nx, desc_.ny, desc_.nz, desc_.vorticity_epsilon, desc_.cell_size);
-        apply_u_forces_kernel<<<u_grid, block, 0, stream>>>(u_, force_x_, desc_.nx, desc_.ny, desc_.nz, desc_.dt);
-        apply_v_forces_kernel<<<v_grid, block, 0, stream>>>(v_, density_, temperature_, force_y_, desc_.nx, desc_.ny, desc_.nz, desc_.ambient_temperature, desc_.density_buoyancy, desc_.temperature_buoyancy, desc_.dt);
-        apply_w_forces_kernel<<<w_grid, block, 0, stream>>>(w_, force_z_, desc_.nx, desc_.ny, desc_.nz, desc_.dt);
+        {
+            nvtx3::scoped_range range{"vsmoke.step.forces"};
+            compute_vorticity_kernel<<<cells, block, 0, stream>>>(u_, v_, w_, omega_x_, omega_y_, omega_z_, omega_mag_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size);
+            compute_confinement_kernel<<<cells, block, 0, stream>>>(omega_x_, omega_y_, omega_z_, omega_mag_, force_x_, force_y_, force_z_, desc_.nx, desc_.ny, desc_.nz, desc_.vorticity_epsilon, desc_.cell_size);
+            apply_u_forces_kernel<<<u_grid, block, 0, stream>>>(u_, force_x_, desc_.nx, desc_.ny, desc_.nz, desc_.dt);
+            apply_v_forces_kernel<<<v_grid, block, 0, stream>>>(v_, density_, temperature_, force_y_, desc_.nx, desc_.ny, desc_.nz, desc_.ambient_temperature, desc_.density_buoyancy, desc_.temperature_buoyancy, desc_.dt);
+            apply_w_forces_kernel<<<w_grid, block, 0, stream>>>(w_, force_z_, desc_.nx, desc_.ny, desc_.nz, desc_.dt);
+        }
 
         std::swap(u_, u_prev_);
         std::swap(v_, v_prev_);
         std::swap(w_, w_prev_);
 
-        advect_u_kernel<<<u_grid, block, 0, stream>>>(u_, u_prev_, v_prev_, w_prev_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, cubic);
-        advect_v_kernel<<<v_grid, block, 0, stream>>>(v_, u_prev_, v_prev_, w_prev_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, cubic);
-        advect_w_kernel<<<w_grid, block, 0, stream>>>(w_, u_prev_, v_prev_, w_prev_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, cubic);
-        set_u_boundary_kernel<<<u_grid, block, 0, stream>>>(u_, desc_.nx, desc_.ny, desc_.nz);
-        set_v_boundary_kernel<<<v_grid, block, 0, stream>>>(v_, desc_.nx, desc_.ny, desc_.nz);
-        set_w_boundary_kernel<<<w_grid, block, 0, stream>>>(w_, desc_.nx, desc_.ny, desc_.nz);
-
-        check_cuda(cudaMemsetAsync(pressure_, 0, cell_bytes_, stream), "cudaMemsetAsync pressure");
-        compute_divergence_kernel<<<cells, block, 0, stream>>>(divergence_, u_, v_, w_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size);
-        for (int iteration = 0; iteration < desc_.pressure_iterations; ++iteration) {
-            pressure_rbgs_kernel<<<cells, block, 0, stream>>>(pressure_, divergence_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, 0);
-            pressure_rbgs_kernel<<<cells, block, 0, stream>>>(pressure_, divergence_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, 1);
+        {
+            nvtx3::scoped_range range{"vsmoke.step.advect_velocity"};
+            advect_u_kernel<<<u_grid, block, 0, stream>>>(u_, u_prev_, v_prev_, w_prev_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, cubic);
+            advect_v_kernel<<<v_grid, block, 0, stream>>>(v_, u_prev_, v_prev_, w_prev_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, cubic);
+            advect_w_kernel<<<w_grid, block, 0, stream>>>(w_, u_prev_, v_prev_, w_prev_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, cubic);
+            set_u_boundary_kernel<<<u_grid, block, 0, stream>>>(u_, desc_.nx, desc_.ny, desc_.nz);
+            set_v_boundary_kernel<<<v_grid, block, 0, stream>>>(v_, desc_.nx, desc_.ny, desc_.nz);
+            set_w_boundary_kernel<<<w_grid, block, 0, stream>>>(w_, desc_.nx, desc_.ny, desc_.nz);
         }
 
-        subtract_gradient_u_kernel<<<u_grid, block, 0, stream>>>(u_, pressure_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt);
-        subtract_gradient_v_kernel<<<v_grid, block, 0, stream>>>(v_, pressure_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt);
-        subtract_gradient_w_kernel<<<w_grid, block, 0, stream>>>(w_, pressure_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt);
-        set_u_boundary_kernel<<<u_grid, block, 0, stream>>>(u_, desc_.nx, desc_.ny, desc_.nz);
-        set_v_boundary_kernel<<<v_grid, block, 0, stream>>>(v_, desc_.nx, desc_.ny, desc_.nz);
-        set_w_boundary_kernel<<<w_grid, block, 0, stream>>>(w_, desc_.nx, desc_.ny, desc_.nz);
+        {
+            nvtx3::scoped_range range{"vsmoke.step.project"};
+            check_cuda(cudaMemsetAsync(pressure_, 0, cell_bytes_, stream), "cudaMemsetAsync pressure");
+            compute_divergence_kernel<<<cells, block, 0, stream>>>(divergence_, u_, v_, w_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size);
+            for (int iteration = 0; iteration < desc_.pressure_iterations; ++iteration) {
+                pressure_rbgs_kernel<<<cells, block, 0, stream>>>(pressure_, divergence_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, 0);
+                pressure_rbgs_kernel<<<cells, block, 0, stream>>>(pressure_, divergence_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, 1);
+            }
+
+            subtract_gradient_u_kernel<<<u_grid, block, 0, stream>>>(u_, pressure_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt);
+            subtract_gradient_v_kernel<<<v_grid, block, 0, stream>>>(v_, pressure_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt);
+            subtract_gradient_w_kernel<<<w_grid, block, 0, stream>>>(w_, pressure_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt);
+            set_u_boundary_kernel<<<u_grid, block, 0, stream>>>(u_, desc_.nx, desc_.ny, desc_.nz);
+            set_v_boundary_kernel<<<v_grid, block, 0, stream>>>(v_, desc_.nx, desc_.ny, desc_.nz);
+            set_w_boundary_kernel<<<w_grid, block, 0, stream>>>(w_, desc_.nx, desc_.ny, desc_.nz);
+        }
 
         std::swap(density_, density_prev_);
         std::swap(temperature_, temperature_prev_);
-        advect_scalar_kernel<<<cells, block, 0, stream>>>(density_, density_prev_, u_, v_, w_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, cubic, true);
-        advect_scalar_kernel<<<cells, block, 0, stream>>>(temperature_, temperature_prev_, u_, v_, w_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, cubic, false);
+        {
+            nvtx3::scoped_range range{"vsmoke.step.advect_scalars"};
+            advect_scalar_kernel<<<cells, block, 0, stream>>>(density_, density_prev_, u_, v_, w_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, cubic, true);
+            advect_scalar_kernel<<<cells, block, 0, stream>>>(temperature_, temperature_prev_, u_, v_, w_, desc_.nx, desc_.ny, desc_.nz, desc_.cell_size, desc_.dt, cubic, false);
+        }
         check_cuda(cudaGetLastError(), "step kernels");
     }
 
     void Solver::snapshot_density(const BufferView& destination, Stream stream) {
+        nvtx3::scoped_range range{"vsmoke.snapshot_density"};
         validate_snapshot_(destination, "snapshot density destination");
         check_cuda(cudaMemcpyAsync(destination.data, density_, cell_bytes_, cudaMemcpyDeviceToDevice, stream), "cudaMemcpyAsync density snapshot");
     }
 
     void Solver::snapshot_temperature(const BufferView& destination, Stream stream) {
+        nvtx3::scoped_range range{"vsmoke.snapshot_temperature"};
         validate_snapshot_(destination, "snapshot temperature destination");
         check_cuda(cudaMemcpyAsync(destination.data, temperature_, cell_bytes_, cudaMemcpyDeviceToDevice, stream), "cudaMemcpyAsync temperature snapshot");
     }
