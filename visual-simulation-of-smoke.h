@@ -96,6 +96,7 @@ typedef struct VisualSimulationOfSmokeStepDesc {
 
 VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_step_cuda(const VisualSimulationOfSmokeStepDesc* desc);
 VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_step_cpu(const VisualSimulationOfSmokeStepDesc* desc);
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_step_parallel(const VisualSimulationOfSmokeStepDesc* desc);
 
 #ifdef __cplusplus
 }
