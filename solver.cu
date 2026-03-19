@@ -6,20 +6,14 @@
 #include <cstring>
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
-#include <stdexcept>
-#include <string>
-#include <utility>
 
 namespace visual_smoke {
     using Stream = cudaStream_t;
 
     namespace {
 
-        inline void check_cuda(cudaError_t status, const char* what) {
-            if (status == cudaSuccess) {
-                return;
-            }
-            throw std::runtime_error(std::string(what) + ": " + cudaGetErrorString(status));
+        [[nodiscard]] inline int32_t cuda_code(cudaError_t status) noexcept {
+            return status == cudaSuccess ? 0 : 5001;
         }
 
         inline std::uint64_t scalar_bytes(const int32_t nx, const int32_t ny, const int32_t nz) {
@@ -559,38 +553,38 @@ int32_t visual_simulation_of_smoke_clear_async(
     void* cuda_stream) {
     using namespace visual_smoke;
     if (nx <= 0 || ny <= 0 || nz <= 0) {
-        throw std::invalid_argument("grid dimensions must be positive");
+        return 1001;
     }
     if (cell_size <= 0.0f) {
-        throw std::invalid_argument("cell_size must be positive");
+        return 1002;
     }
     const auto cell_bytes = visual_smoke::scalar_bytes(nx, ny, nz);
     const auto u_bytes = visual_smoke::velocity_x_bytes(nx, ny, nz);
     const auto v_bytes = visual_smoke::velocity_y_bytes(nx, ny, nz);
     const auto w_bytes = visual_smoke::velocity_z_bytes(nx, ny, nz);
     if (density == nullptr || density_bytes < cell_bytes) {
-        throw std::invalid_argument("density is invalid");
+        return 2001;
     }
     if (temperature == nullptr || temperature_bytes < cell_bytes) {
-        throw std::invalid_argument("temperature is invalid");
+        return 2002;
     }
     if (velocity_x == nullptr || velocity_x_bytes < u_bytes) {
-        throw std::invalid_argument("velocity_x is invalid");
+        return 2003;
     }
     if (velocity_y == nullptr || velocity_y_bytes < v_bytes) {
-        throw std::invalid_argument("velocity_y is invalid");
+        return 2004;
     }
     if (velocity_z == nullptr || velocity_z_bytes < w_bytes) {
-        throw std::invalid_argument("velocity_z is invalid");
+        return 2005;
     }
 
     nvtx3::scoped_range range{"vsmoke.clear"};
-    check_cuda(cudaMemsetAsync(density, 0, cell_bytes, to_stream(cuda_stream)), "cudaMemsetAsync density");
-    check_cuda(cudaMemsetAsync(temperature, 0, cell_bytes, to_stream(cuda_stream)), "cudaMemsetAsync temperature");
-    check_cuda(cudaMemsetAsync(velocity_x, 0, u_bytes, to_stream(cuda_stream)), "cudaMemsetAsync velocity_x");
-    check_cuda(cudaMemsetAsync(velocity_y, 0, v_bytes, to_stream(cuda_stream)), "cudaMemsetAsync velocity_y");
-    check_cuda(cudaMemsetAsync(velocity_z, 0, w_bytes, to_stream(cuda_stream)), "cudaMemsetAsync velocity_z");
-    return VISUAL_SIMULATION_OF_SMOKE_SUCCESS;
+    if (cuda_code(cudaMemsetAsync(density, 0, cell_bytes, to_stream(cuda_stream))) != 0) return 5001;
+    if (cuda_code(cudaMemsetAsync(temperature, 0, cell_bytes, to_stream(cuda_stream))) != 0) return 5001;
+    if (cuda_code(cudaMemsetAsync(velocity_x, 0, u_bytes, to_stream(cuda_stream))) != 0) return 5001;
+    if (cuda_code(cudaMemsetAsync(velocity_y, 0, v_bytes, to_stream(cuda_stream))) != 0) return 5001;
+    if (cuda_code(cudaMemsetAsync(velocity_z, 0, w_bytes, to_stream(cuda_stream))) != 0) return 5001;
+    return 0;
 }
 
 int32_t visual_simulation_of_smoke_add_source_async(
@@ -623,32 +617,32 @@ int32_t visual_simulation_of_smoke_add_source_async(
     void* cuda_stream) {
     using namespace visual_smoke;
     if (nx <= 0 || ny <= 0 || nz <= 0) {
-        throw std::invalid_argument("grid dimensions must be positive");
+        return 1001;
     }
     if (cell_size <= 0.0f) {
-        throw std::invalid_argument("cell_size must be positive");
+        return 1002;
     }
     if (radius <= 0.0f) {
-        throw std::invalid_argument("source radius must be positive");
+        return 1005;
     }
     const auto cell_bytes = visual_smoke::scalar_bytes(nx, ny, nz);
     const auto u_bytes = visual_smoke::velocity_x_bytes(nx, ny, nz);
     const auto v_bytes = visual_smoke::velocity_y_bytes(nx, ny, nz);
     const auto w_bytes = visual_smoke::velocity_z_bytes(nx, ny, nz);
     if (density == nullptr || density_bytes < cell_bytes) {
-        throw std::invalid_argument("density is invalid");
+        return 2001;
     }
     if (temperature == nullptr || temperature_bytes < cell_bytes) {
-        throw std::invalid_argument("temperature is invalid");
+        return 2002;
     }
     if (velocity_x == nullptr || velocity_x_bytes < u_bytes) {
-        throw std::invalid_argument("velocity_x is invalid");
+        return 2003;
     }
     if (velocity_y == nullptr || velocity_y_bytes < v_bytes) {
-        throw std::invalid_argument("velocity_y is invalid");
+        return 2004;
     }
     if (velocity_z == nullptr || velocity_z_bytes < w_bytes) {
-        throw std::invalid_argument("velocity_z is invalid");
+        return 2005;
     }
 
     nvtx3::scoped_range range{"vsmoke.add_source"};
@@ -674,8 +668,8 @@ int32_t visual_simulation_of_smoke_add_source_async(
         reinterpret_cast<float*>(velocity_y), nx, ny, nz, center_x, center_y, center_z, radius, velocity_source_y);
     add_source_w_kernel<<<make_grid(nx, ny, nz + 1, block), block, 0, to_stream(cuda_stream)>>>(
         reinterpret_cast<float*>(velocity_z), nx, ny, nz, center_x, center_y, center_z, radius, velocity_source_z);
-    check_cuda(cudaGetLastError(), "add_source kernels");
-    return VISUAL_SIMULATION_OF_SMOKE_SUCCESS;
+    if (cuda_code(cudaGetLastError()) != 0) return 5001;
+    return 0;
 }
 
 int32_t visual_simulation_of_smoke_step_async(
@@ -708,35 +702,38 @@ int32_t visual_simulation_of_smoke_step_async(
     void* cuda_stream) {
     using namespace visual_smoke;
     if (nx <= 0 || ny <= 0 || nz <= 0) {
-        throw std::invalid_argument("grid dimensions must be positive");
+        return 1001;
     }
     if (cell_size <= 0.0f) {
-        throw std::invalid_argument("cell_size must be positive");
+        return 1002;
     }
-    if (dt <= 0.0f || pressure_iterations <= 0) {
-        throw std::invalid_argument("step params are invalid");
+    if (dt <= 0.0f) {
+        return 1003;
+    }
+    if (pressure_iterations <= 0) {
+        return 1004;
     }
     const auto cell_bytes = visual_smoke::scalar_bytes(nx, ny, nz);
     const auto u_bytes = visual_smoke::velocity_x_bytes(nx, ny, nz);
     const auto v_bytes = visual_smoke::velocity_y_bytes(nx, ny, nz);
     const auto w_bytes = visual_smoke::velocity_z_bytes(nx, ny, nz);
     if (density == nullptr || density_bytes < cell_bytes) {
-        throw std::invalid_argument("density is invalid");
+        return 2001;
     }
     if (temperature == nullptr || temperature_bytes < cell_bytes) {
-        throw std::invalid_argument("temperature is invalid");
+        return 2002;
     }
     if (velocity_x == nullptr || velocity_x_bytes < u_bytes) {
-        throw std::invalid_argument("velocity_x is invalid");
+        return 2003;
     }
     if (velocity_y == nullptr || velocity_y_bytes < v_bytes) {
-        throw std::invalid_argument("velocity_y is invalid");
+        return 2004;
     }
     if (velocity_z == nullptr || velocity_z_bytes < w_bytes) {
-        throw std::invalid_argument("velocity_z is invalid");
+        return 2005;
     }
     if (workspace == nullptr || workspace_bytes < visual_smoke::workspace_bytes(nx, ny, nz)) {
-        throw std::invalid_argument("workspace is invalid");
+        return 2007;
     }
 
     auto* cursor = reinterpret_cast<std::byte*>(workspace);
@@ -791,7 +788,7 @@ int32_t visual_simulation_of_smoke_step_async(
         apply_u_forces_kernel<<<u_grid, block, 0, stream>>>(u, force_x, nx, ny, nz, dt);
         apply_v_forces_kernel<<<v_grid, block, 0, stream>>>(v, density_f, temperature_f, force_y, nx, ny, nz, ambient_temperature, density_buoyancy, temperature_buoyancy, dt);
         apply_w_forces_kernel<<<w_grid, block, 0, stream>>>(w, force_z, nx, ny, nz, dt);
-        check_cuda(cudaGetLastError(), "force kernels");
+        if (cuda_code(cudaGetLastError()) != 0) return 5001;
     }
     {
         nvtx3::scoped_range range{"vsmoke.step.advect_velocity"};
@@ -801,11 +798,11 @@ int32_t visual_simulation_of_smoke_step_async(
         set_u_boundary_kernel<<<u_grid, block, 0, stream>>>(u_prev, nx, ny, nz);
         set_v_boundary_kernel<<<v_grid, block, 0, stream>>>(v_prev, nx, ny, nz);
         set_w_boundary_kernel<<<w_grid, block, 0, stream>>>(w_prev, nx, ny, nz);
-        check_cuda(cudaGetLastError(), "advect velocity kernels");
+        if (cuda_code(cudaGetLastError()) != 0) return 5001;
     }
     {
         nvtx3::scoped_range range{"vsmoke.step.project"};
-        check_cuda(cudaMemsetAsync(pressure, 0, cell_bytes, stream), "cudaMemsetAsync pressure");
+        if (cuda_code(cudaMemsetAsync(pressure, 0, cell_bytes, stream)) != 0) return 5001;
         compute_divergence_kernel<<<cells, block, 0, stream>>>(divergence, u_prev, v_prev, w_prev, nx, ny, nz, cell_size);
         for (int iteration = 0; iteration < pressure_iterations; ++iteration) {
             pressure_rbgs_kernel<<<cells, block, 0, stream>>>(pressure, divergence, nx, ny, nz, cell_size, dt, 0);
@@ -817,20 +814,20 @@ int32_t visual_simulation_of_smoke_step_async(
         set_u_boundary_kernel<<<u_grid, block, 0, stream>>>(u_prev, nx, ny, nz);
         set_v_boundary_kernel<<<v_grid, block, 0, stream>>>(v_prev, nx, ny, nz);
         set_w_boundary_kernel<<<w_grid, block, 0, stream>>>(w_prev, nx, ny, nz);
-        check_cuda(cudaGetLastError(), "project kernels");
+        if (cuda_code(cudaGetLastError()) != 0) return 5001;
     }
-    check_cuda(cudaMemcpyAsync(u, u_prev, u_bytes, cudaMemcpyDeviceToDevice, stream), "cudaMemcpyAsync velocity_x");
-    check_cuda(cudaMemcpyAsync(v, v_prev, v_bytes, cudaMemcpyDeviceToDevice, stream), "cudaMemcpyAsync velocity_y");
-    check_cuda(cudaMemcpyAsync(w, w_prev, w_bytes, cudaMemcpyDeviceToDevice, stream), "cudaMemcpyAsync velocity_z");
-    check_cuda(cudaMemcpyAsync(density_prev, density_f, cell_bytes, cudaMemcpyDeviceToDevice, stream), "cudaMemcpyAsync density_prev");
-    check_cuda(cudaMemcpyAsync(temperature_prev, temperature_f, cell_bytes, cudaMemcpyDeviceToDevice, stream), "cudaMemcpyAsync temperature_prev");
+    if (cuda_code(cudaMemcpyAsync(u, u_prev, u_bytes, cudaMemcpyDeviceToDevice, stream)) != 0) return 5001;
+    if (cuda_code(cudaMemcpyAsync(v, v_prev, v_bytes, cudaMemcpyDeviceToDevice, stream)) != 0) return 5001;
+    if (cuda_code(cudaMemcpyAsync(w, w_prev, w_bytes, cudaMemcpyDeviceToDevice, stream)) != 0) return 5001;
+    if (cuda_code(cudaMemcpyAsync(density_prev, density_f, cell_bytes, cudaMemcpyDeviceToDevice, stream)) != 0) return 5001;
+    if (cuda_code(cudaMemcpyAsync(temperature_prev, temperature_f, cell_bytes, cudaMemcpyDeviceToDevice, stream)) != 0) return 5001;
     {
         nvtx3::scoped_range range{"vsmoke.step.advect_scalars"};
         advect_scalar_kernel<<<cells, block, 0, stream>>>(density_f, density_prev, u, v, w, nx, ny, nz, cell_size, dt, cubic, true);
         advect_scalar_kernel<<<cells, block, 0, stream>>>(temperature_f, temperature_prev, u, v, w, nx, ny, nz, cell_size, dt, cubic, false);
-        check_cuda(cudaGetLastError(), "advect scalar kernels");
+        if (cuda_code(cudaGetLastError()) != 0) return 5001;
     }
-    return VISUAL_SIMULATION_OF_SMOKE_SUCCESS;
+    return 0;
 }
 
 int32_t visual_simulation_of_smoke_compute_velocity_magnitude_async(
@@ -852,26 +849,26 @@ int32_t visual_simulation_of_smoke_compute_velocity_magnitude_async(
     void* cuda_stream) {
     using namespace visual_smoke;
     if (nx <= 0 || ny <= 0 || nz <= 0) {
-        throw std::invalid_argument("grid dimensions must be positive");
+        return 1001;
     }
     if (cell_size <= 0.0f) {
-        throw std::invalid_argument("cell_size must be positive");
+        return 1002;
     }
     const auto cell_bytes = visual_smoke::scalar_bytes(nx, ny, nz);
     const auto u_bytes = visual_smoke::velocity_x_bytes(nx, ny, nz);
     const auto v_bytes = visual_smoke::velocity_y_bytes(nx, ny, nz);
     const auto w_bytes = visual_smoke::velocity_z_bytes(nx, ny, nz);
     if (velocity_x == nullptr || velocity_x_bytes < u_bytes) {
-        throw std::invalid_argument("velocity_x is invalid");
+        return 2003;
     }
     if (velocity_y == nullptr || velocity_y_bytes < v_bytes) {
-        throw std::invalid_argument("velocity_y is invalid");
+        return 2004;
     }
     if (velocity_z == nullptr || velocity_z_bytes < w_bytes) {
-        throw std::invalid_argument("velocity_z is invalid");
+        return 2005;
     }
     if (destination == nullptr || destination_bytes < cell_bytes) {
-        throw std::invalid_argument("destination is invalid");
+        return 2006;
     }
 
     nvtx3::scoped_range range{"vsmoke.snapshot_velocity_magnitude"};
@@ -887,8 +884,8 @@ int32_t visual_simulation_of_smoke_compute_velocity_magnitude_async(
         nx,
         ny,
         nz);
-    check_cuda(cudaGetLastError(), "snapshot_velocity_magnitude_kernel");
-    return VISUAL_SIMULATION_OF_SMOKE_SUCCESS;
+    if (cuda_code(cudaGetLastError()) != 0) return 5001;
+    return 0;
 }
 
 } // extern "C"

@@ -15,11 +15,30 @@
 #define VISUAL_SIMULATION_OF_SMOKE_API
 #endif
 
-#define VISUAL_SIMULATION_OF_SMOKE_SUCCESS 0
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/*
+Error code scheme:
+0     : success
+1xxx  : scalar/grid/step parameter errors
+1001  : invalid grid dimensions
+1002  : invalid cell size
+1003  : invalid dt
+1004  : invalid iteration count
+1005  : invalid source radius
+2xxx  : buffer/workspace errors
+2001  : invalid density buffer
+2002  : invalid temperature buffer
+2003  : invalid velocity_x buffer
+2004  : invalid velocity_y buffer
+2005  : invalid velocity_z buffer
+2006  : invalid destination buffer
+2007  : invalid workspace buffer
+5xxx  : CUDA runtime or kernel launch failure
+5001  : CUDA call failed
+*/
 
 VISUAL_SIMULATION_OF_SMOKE_API uint64_t visual_simulation_of_smoke_scalar_field_bytes(int32_t nx, int32_t ny, int32_t nz);
 VISUAL_SIMULATION_OF_SMOKE_API uint64_t visual_simulation_of_smoke_velocity_x_bytes(int32_t nx, int32_t ny, int32_t nz);
