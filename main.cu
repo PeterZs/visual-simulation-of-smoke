@@ -121,25 +121,6 @@ int main() {
     const std::size_t vy_count = static_cast<std::size_t>(velocity_y_bytes / sizeof(float));
     const std::size_t vz_count = static_cast<std::size_t>(velocity_z_bytes / sizeof(float));
 
-    std::vector<float> cpu_density(scalar_count, 0.0f);
-    std::vector<float> cpu_temperature(scalar_count, 0.0f);
-    std::vector<float> cpu_velocity_x(vx_count, 0.0f);
-    std::vector<float> cpu_velocity_y(vy_count, 0.0f);
-    std::vector<float> cpu_velocity_z(vz_count, 0.0f);
-    std::vector<float> cpu_temporary_previous_density(scalar_count, 0.0f);
-    std::vector<float> cpu_temporary_previous_temperature(scalar_count, 0.0f);
-    std::vector<float> cpu_temporary_previous_velocity_x(vx_count, 0.0f);
-    std::vector<float> cpu_temporary_previous_velocity_y(vy_count, 0.0f);
-    std::vector<float> cpu_temporary_previous_velocity_z(vz_count, 0.0f);
-    std::vector<float> cpu_temporary_pressure(scalar_count, 0.0f);
-    std::vector<float> cpu_temporary_divergence(scalar_count, 0.0f);
-    std::vector<float> cpu_temporary_omega_x(scalar_count, 0.0f);
-    std::vector<float> cpu_temporary_omega_y(scalar_count, 0.0f);
-    std::vector<float> cpu_temporary_omega_z(scalar_count, 0.0f);
-    std::vector<float> cpu_temporary_omega_magnitude(scalar_count, 0.0f);
-    std::vector<float> cpu_temporary_force_x(scalar_count, 0.0f);
-    std::vector<float> cpu_temporary_force_y(scalar_count, 0.0f);
-    std::vector<float> cpu_temporary_force_z(scalar_count, 0.0f);
     std::vector<float> parallel_density(scalar_count, 0.0f);
     std::vector<float> parallel_temperature(scalar_count, 0.0f);
     std::vector<float> parallel_velocity_x(vx_count, 0.0f);
@@ -160,7 +141,7 @@ int main() {
     std::vector<float> parallel_temporary_force_y(scalar_count, 0.0f);
     std::vector<float> parallel_temporary_force_z(scalar_count, 0.0f);
 
-    auto add_source_cpu = [&](std::vector<float>& density, std::vector<float>& temperature, std::vector<float>& velocity_x, std::vector<float>& velocity_y, std::vector<float>& velocity_z) {
+    auto add_source_host = [&](std::vector<float>& density, std::vector<float>& temperature, std::vector<float>& velocity_x, std::vector<float>& velocity_y, std::vector<float>& velocity_z) {
         const float center_x = static_cast<float>(nx) * 0.5f;
         const float center_y = static_cast<float>(ny) * 0.18f;
         const float center_z = static_cast<float>(nz) * 0.5f;
@@ -219,58 +200,9 @@ int main() {
         }
     };
 
-    const auto cpu_begin = std::chrono::steady_clock::now();
-    for (int frame = 0; frame < frames; ++frame) {
-        add_source_cpu(cpu_density, cpu_temperature, cpu_velocity_x, cpu_velocity_y, cpu_velocity_z);
-
-        VisualSimulationOfSmokeStepDesc cpu_desc{};
-        cpu_desc.struct_size                    = sizeof(VisualSimulationOfSmokeStepDesc);
-        cpu_desc.api_version                    = 1;
-        cpu_desc.nx                             = nx;
-        cpu_desc.ny                             = ny;
-        cpu_desc.nz                             = nz;
-        cpu_desc.cell_size                      = cell_size;
-        cpu_desc.dt                             = dt;
-        cpu_desc.ambient_temperature            = ambient_temperature;
-        cpu_desc.density_buoyancy               = density_buoyancy;
-        cpu_desc.temperature_buoyancy           = temperature_buoyancy;
-        cpu_desc.vorticity_epsilon              = vorticity_epsilon;
-        cpu_desc.pressure_iterations            = pressure_iterations;
-        cpu_desc.use_monotonic_cubic            = use_monotonic_cubic;
-        cpu_desc.density                        = cpu_density.data();
-        cpu_desc.temperature                    = cpu_temperature.data();
-        cpu_desc.velocity_x                     = cpu_velocity_x.data();
-        cpu_desc.velocity_y                     = cpu_velocity_y.data();
-        cpu_desc.velocity_z                     = cpu_velocity_z.data();
-        cpu_desc.temporary_previous_density     = cpu_temporary_previous_density.data();
-        cpu_desc.temporary_previous_temperature = cpu_temporary_previous_temperature.data();
-        cpu_desc.temporary_previous_velocity_x  = cpu_temporary_previous_velocity_x.data();
-        cpu_desc.temporary_previous_velocity_y  = cpu_temporary_previous_velocity_y.data();
-        cpu_desc.temporary_previous_velocity_z  = cpu_temporary_previous_velocity_z.data();
-        cpu_desc.temporary_pressure             = cpu_temporary_pressure.data();
-        cpu_desc.temporary_divergence           = cpu_temporary_divergence.data();
-        cpu_desc.temporary_omega_x              = cpu_temporary_omega_x.data();
-        cpu_desc.temporary_omega_y              = cpu_temporary_omega_y.data();
-        cpu_desc.temporary_omega_z              = cpu_temporary_omega_z.data();
-        cpu_desc.temporary_omega_magnitude      = cpu_temporary_omega_magnitude.data();
-        cpu_desc.temporary_force_x              = cpu_temporary_force_x.data();
-        cpu_desc.temporary_force_y              = cpu_temporary_force_y.data();
-        cpu_desc.temporary_force_z              = cpu_temporary_force_z.data();
-        cpu_desc.block_x                        = block_x;
-        cpu_desc.block_y                        = block_y;
-        cpu_desc.block_z                        = block_z;
-        cpu_desc.stream                         = nullptr;
-        if (!smoke_ok(visual_simulation_of_smoke_validate_desc(&cpu_desc), "visual_simulation_of_smoke_validate_desc")) return EXIT_FAILURE;
-        if (!smoke_ok(visual_simulation_of_smoke_step_cpu(&cpu_desc), "visual_simulation_of_smoke_step_cpu")) return EXIT_FAILURE;
-    }
-    const auto cpu_end = std::chrono::steady_clock::now();
-
-    const float cpu_total_density = std::accumulate(cpu_density.begin(), cpu_density.end(), 0.0f);
-    const float cpu_peak_density  = cpu_density.empty() ? 0.0f : *std::max_element(cpu_density.begin(), cpu_density.end());
-
     const auto parallel_begin = std::chrono::steady_clock::now();
     for (int frame = 0; frame < frames; ++frame) {
-        add_source_cpu(parallel_density, parallel_temperature, parallel_velocity_x, parallel_velocity_y, parallel_velocity_z);
+        add_source_host(parallel_density, parallel_temperature, parallel_velocity_x, parallel_velocity_y, parallel_velocity_z);
 
         VisualSimulationOfSmokeStepDesc parallel_desc{};
         parallel_desc.struct_size                    = sizeof(VisualSimulationOfSmokeStepDesc);
@@ -423,13 +355,10 @@ int main() {
 
     const float cuda_total_density = exit_code == EXIT_SUCCESS ? std::accumulate(host_density.begin(), host_density.end(), 0.0f) : 0.0f;
     const float cuda_peak_density  = exit_code == EXIT_SUCCESS && !host_density.empty() ? *std::max_element(host_density.begin(), host_density.end()) : 0.0f;
-    float parallel_density_l1_diff = 0.0f;
-    float cuda_density_l1_diff     = 0.0f;
+    float cuda_density_l1_diff = 0.0f;
     if (exit_code == EXIT_SUCCESS) {
-        for (std::size_t i = 0; i < scalar_count; ++i) {
-            parallel_density_l1_diff += std::abs(cpu_density[i] - parallel_density[i]);
-            cuda_density_l1_diff += std::abs(cpu_density[i] - host_density[i]);
-        }
+        for (std::size_t i = 0; i < scalar_count; ++i)
+            cuda_density_l1_diff += std::abs(parallel_density[i] - host_density[i]);
     }
 
     cudaStreamDestroy(stream);
@@ -454,7 +383,6 @@ int main() {
     cudaFree(temporary_force_z);
     if (exit_code != EXIT_SUCCESS) return exit_code;
 
-    const double cpu_ms = std::chrono::duration<double, std::milli>(cpu_end - cpu_begin).count();
     const double parallel_ms = std::chrono::duration<double, std::milli>(parallel_end - parallel_begin).count();
     const double cuda_ms = std::chrono::duration<double, std::milli>(cuda_end - cuda_begin).count();
 
@@ -462,12 +390,12 @@ int main() {
     std::cout << "visual-simulation-of-smoke benchmark\n";
     std::cout << "grid: " << nx << " x " << ny << " x " << nz << '\n';
     std::cout << "frames: " << frames << '\n';
-    std::cout << "| metric | cpu | parallel | cuda | extra |\n";
-    std::cout << "|---|---:|---:|---:|---:|\n";
-    std::cout << "| total_ms | " << cpu_ms << " | " << parallel_ms << " | " << cuda_ms << " | p=" << (parallel_ms > 0.0 ? cpu_ms / parallel_ms : 0.0) << "x, c=" << (cuda_ms > 0.0 ? cpu_ms / cuda_ms : 0.0) << "x |\n";
-    std::cout << "| step_ms | " << cpu_ms / static_cast<double>(frames) << " | " << parallel_ms / static_cast<double>(frames) << " | " << cuda_ms / static_cast<double>(frames) << " | p=" << (parallel_ms > 0.0 ? cpu_ms / parallel_ms : 0.0) << "x, c=" << (cuda_ms > 0.0 ? cpu_ms / cuda_ms : 0.0) << "x |\n";
-    std::cout << "| total_density | " << cpu_total_density << " | " << parallel_total_density << " | " << cuda_total_density << " | - |\n";
-    std::cout << "| peak_density | " << cpu_peak_density << " | " << parallel_peak_density << " | " << cuda_peak_density << " | - |\n";
-    std::cout << "| density_l1_diff_vs_cpu | 0.000 | " << parallel_density_l1_diff << " | " << cuda_density_l1_diff << " | - |\n";
+    std::cout << "| metric | parallel | cuda | extra |\n";
+    std::cout << "|---|---:|---:|---:|\n";
+    std::cout << "| total_ms | " << parallel_ms << " | " << cuda_ms << " | c=" << (cuda_ms > 0.0 ? parallel_ms / cuda_ms : 0.0) << "x |\n";
+    std::cout << "| step_ms | " << parallel_ms / static_cast<double>(frames) << " | " << cuda_ms / static_cast<double>(frames) << " | c=" << (cuda_ms > 0.0 ? parallel_ms / cuda_ms : 0.0) << "x |\n";
+    std::cout << "| total_density | " << parallel_total_density << " | " << cuda_total_density << " | - |\n";
+    std::cout << "| peak_density | " << parallel_peak_density << " | " << cuda_peak_density << " | - |\n";
+    std::cout << "| density_l1_diff_vs_parallel | 0.000 | " << cuda_density_l1_diff << " | - |\n";
     return EXIT_SUCCESS;
 }

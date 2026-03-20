@@ -28,7 +28,6 @@ add_library(
         SHARED
         visual-simulation-of-smoke.h
         backend-cuda.cu
-        backend-cpu.cpp
         backend-parallel.cpp
 )
 
