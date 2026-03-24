@@ -32,10 +32,4 @@ int32_t visual_simulation_of_smoke_validate_desc(const VisualSimulationOfSmokeSt
     return 0;
 }
 
-#if defined(VISUAL_SIMULATION_OF_SMOKE_NO_CUDA)
-int32_t visual_simulation_of_smoke_step_cuda(const VisualSimulationOfSmokeStepDesc*) {
-    return 5002;
-}
-#endif
-
 } // extern "C"
