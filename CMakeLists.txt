@@ -27,7 +27,6 @@ add_library(
         visual-simulation-of-smoke.h
         validate.cpp
         backend-cuda.cu
-        backend-parallel.cpp
 )
 
 add_executable(
