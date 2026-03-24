@@ -28,6 +28,7 @@ Error code scheme:
 1002  : invalid cell size
 1003  : invalid dt
 1004  : invalid iteration count
+1005  : unsupported api_version
 2xxx  : buffer errors
 2001  : invalid density buffer
 2002  : invalid temperature buffer
@@ -50,7 +51,10 @@ Error code scheme:
 2020  : invalid temporary force_z buffer
 5xxx  : CUDA runtime or kernel launch failure
 5001  : CUDA call failed
+5002  : CUDA backend unavailable
 */
+
+#define VISUAL_SIMULATION_OF_SMOKE_API_VERSION 1u
 
 typedef struct VisualSimulationOfSmokeStepDesc {
     uint32_t struct_size;

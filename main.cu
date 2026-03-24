@@ -206,7 +206,7 @@ int main() {
 
         VisualSimulationOfSmokeStepDesc parallel_desc{};
         parallel_desc.struct_size                    = sizeof(VisualSimulationOfSmokeStepDesc);
-        parallel_desc.api_version                    = 1;
+        parallel_desc.api_version                    = VISUAL_SIMULATION_OF_SMOKE_API_VERSION;
         parallel_desc.nx                             = nx;
         parallel_desc.ny                             = ny;
         parallel_desc.nz                             = nz;
@@ -309,7 +309,7 @@ int main() {
 
         VisualSimulationOfSmokeStepDesc cuda_desc{};
         cuda_desc.struct_size                    = sizeof(VisualSimulationOfSmokeStepDesc);
-        cuda_desc.api_version                    = 1;
+        cuda_desc.api_version                    = VISUAL_SIMULATION_OF_SMOKE_API_VERSION;
         cuda_desc.nx                             = nx;
         cuda_desc.ny                             = ny;
         cuda_desc.nz                             = nz;
