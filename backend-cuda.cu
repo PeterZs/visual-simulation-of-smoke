@@ -9,23 +9,29 @@ namespace visual_smoke {
 
     namespace {
 
-        inline std::uint64_t scalar_bytes(const int32_t nx, const int32_t ny, const int32_t nz) {
-            return static_cast<std::uint64_t>(nx) * static_cast<std::uint64_t>(ny) * static_cast<std::uint64_t>(nz) * sizeof(float);
-        }
+        constexpr int max_levels = 16;
 
-        inline std::uint64_t velocity_x_bytes(const int32_t nx, const int32_t ny, const int32_t nz) {
-            return static_cast<std::uint64_t>(nx + 1) * static_cast<std::uint64_t>(ny) * static_cast<std::uint64_t>(nz) * sizeof(float);
-        }
+        struct GridLevel {
+            int nx;
+            int ny;
+            int nz;
+            float* solution;
+            float* rhs;
+        };
 
-        inline std::uint64_t velocity_y_bytes(const int32_t nx, const int32_t ny, const int32_t nz) {
-            return static_cast<std::uint64_t>(nx) * static_cast<std::uint64_t>(ny + 1) * static_cast<std::uint64_t>(nz) * sizeof(float);
-        }
+        struct GridHierarchy {
+            int level_count;
+            GridLevel levels[max_levels];
+        };
 
-        inline std::uint64_t velocity_z_bytes(const int32_t nx, const int32_t ny, const int32_t nz) {
-            return static_cast<std::uint64_t>(nx) * static_cast<std::uint64_t>(ny) * static_cast<std::uint64_t>(nz + 1) * sizeof(float);
-        }
+        struct VCycleConfig {
+            int cycles;
+            int pre_smooth;
+            int post_smooth;
+            int coarse_smooth;
+        };
 
-        inline dim3 make_grid(int nx, int ny, int nz, const dim3& block) {
+        inline dim3 make_grid(const int nx, const int ny, const int nz, const dim3& block) {
             return dim3(static_cast<unsigned>((nx + static_cast<int>(block.x) - 1) / static_cast<int>(block.x)), static_cast<unsigned>((ny + static_cast<int>(block.y) - 1) / static_cast<int>(block.y)), static_cast<unsigned>((nz + static_cast<int>(block.z) - 1) / static_cast<int>(block.z)));
         }
 
@@ -379,6 +385,92 @@ namespace visual_smoke {
             }
         }
 
+        GridHierarchy build_hierarchy(const int base_nx, const int base_ny, const int base_nz, float* base_solution, float* base_rhs, float* coarse_solution_storage, float* coarse_rhs_storage) {
+            GridHierarchy hierarchy{.level_count = 1};
+            hierarchy.levels[0] = GridLevel{
+                .nx       = base_nx,
+                .ny       = base_ny,
+                .nz       = base_nz,
+                .solution = base_solution,
+                .rhs      = base_rhs,
+            };
+
+            std::uint64_t offset = 0;
+            while (hierarchy.level_count < max_levels) {
+                const GridLevel& previous = hierarchy.levels[hierarchy.level_count - 1];
+                if (previous.nx <= 1 && previous.ny <= 1 && previous.nz <= 1) break;
+
+                const int nx = std::max(1, (previous.nx + 1) / 2);
+                const int ny = std::max(1, (previous.ny + 1) / 2);
+                const int nz = std::max(1, (previous.nz + 1) / 2);
+
+                hierarchy.levels[hierarchy.level_count] = GridLevel{
+                    .nx       = nx,
+                    .ny       = ny,
+                    .nz       = nz,
+                    .solution = coarse_solution_storage + offset,
+                    .rhs      = coarse_rhs_storage + offset,
+                };
+
+                offset += static_cast<std::uint64_t>(nx) * static_cast<std::uint64_t>(ny) * static_cast<std::uint64_t>(nz);
+                ++hierarchy.level_count;
+            }
+
+            return hierarchy;
+        }
+
+        struct PoissonVCycleOps {
+            int clear_coarse_solution(const GridLevel& level, const Stream stream) const {
+                const auto bytes = static_cast<std::uint64_t>(level.nx) * static_cast<std::uint64_t>(level.ny) * static_cast<std::uint64_t>(level.nz) * sizeof(float);
+                return cudaMemsetAsync(level.solution, 0, bytes, stream) == cudaSuccess ? 0 : 5001;
+            }
+
+            int smooth_level(const GridLevel& level, const dim3& block, const Stream stream, const int iterations) const {
+                const dim3 grid = make_grid(level.nx, level.ny, level.nz, block);
+                for (int i = 0; i < iterations; ++i) {
+                    poisson_rbgs_kernel<<<grid, block, 0, stream>>>(level.solution, level.rhs, level.nx, level.ny, level.nz, 0);
+                    poisson_rbgs_kernel<<<grid, block, 0, stream>>>(level.solution, level.rhs, level.nx, level.ny, level.nz, 1);
+                }
+                return cudaGetLastError() == cudaSuccess ? 0 : 5001;
+            }
+
+            int restrict_residual(const GridLevel& fine, const GridLevel& coarse, const dim3& block, const Stream stream) const {
+                restrict_poisson_residual_kernel<<<make_grid(coarse.nx, coarse.ny, coarse.nz, block), block, 0, stream>>>(coarse.rhs, fine.solution, fine.rhs, fine.nx, fine.ny, fine.nz);
+                return cudaGetLastError() == cudaSuccess ? 0 : 5001;
+            }
+
+            int prolongate_and_postprocess(const GridLevel& fine, const GridLevel& coarse, const dim3& block, const Stream stream) const {
+                prolongate_add_kernel<<<make_grid(fine.nx, fine.ny, fine.nz, block), block, 0, stream>>>(fine.solution, coarse.solution, fine.nx, fine.ny, fine.nz, coarse.nx, coarse.ny, coarse.nz);
+                return cudaGetLastError() == cudaSuccess ? 0 : 5001;
+            }
+        };
+
+        template <class TOps>
+        int run_v_cycle(const GridHierarchy& hierarchy, const VCycleConfig& config, const TOps& ops, const dim3& block, const Stream stream) {
+            for (int cycle = 0; cycle < config.cycles; ++cycle) {
+                for (int level_index = 0; level_index + 1 < hierarchy.level_count; ++level_index) {
+                    const GridLevel& fine   = hierarchy.levels[level_index];
+                    const GridLevel& coarse = hierarchy.levels[level_index + 1];
+
+                    if (const int code = ops.smooth_level(fine, block, stream, config.pre_smooth); code != 0) return code;
+                    if (const int code = ops.clear_coarse_solution(coarse, stream); code != 0) return code;
+                    if (const int code = ops.restrict_residual(fine, coarse, block, stream); code != 0) return code;
+                }
+
+                if (const int code = ops.smooth_level(hierarchy.levels[hierarchy.level_count - 1], block, stream, config.coarse_smooth); code != 0) return code;
+
+                for (int level_index = hierarchy.level_count - 2; level_index >= 0; --level_index) {
+                    const GridLevel& fine   = hierarchy.levels[level_index];
+                    const GridLevel& coarse = hierarchy.levels[level_index + 1];
+
+                    if (const int code = ops.prolongate_and_postprocess(fine, coarse, block, stream); code != 0) return code;
+                    if (const int code = ops.smooth_level(fine, block, stream, config.post_smooth); code != 0) return code;
+                }
+            }
+
+            return 0;
+        }
+
     } // namespace
 
 } // namespace visual_smoke
@@ -401,10 +493,10 @@ int32_t visual_simulation_of_smoke_step_cuda(const VisualSimulationOfSmokeStepDe
     const int32_t block_y              = desc->block_y;
     const int32_t block_z              = desc->block_z;
     const uint32_t use_monotonic_cubic = desc->use_monotonic_cubic;
-    const auto cell_bytes              = visual_smoke::scalar_bytes(nx, ny, nz);
-    const auto u_bytes                 = visual_smoke::velocity_x_bytes(nx, ny, nz);
-    const auto v_bytes                 = visual_smoke::velocity_y_bytes(nx, ny, nz);
-    const auto w_bytes                 = visual_smoke::velocity_z_bytes(nx, ny, nz);
+    const auto cell_bytes              = static_cast<std::uint64_t>(nx) * static_cast<std::uint64_t>(ny) * static_cast<std::uint64_t>(nz) * sizeof(float);
+    const auto u_bytes                 = static_cast<std::uint64_t>(nx + 1) * static_cast<std::uint64_t>(ny) * static_cast<std::uint64_t>(nz) * sizeof(float);
+    const auto v_bytes                 = static_cast<std::uint64_t>(nx) * static_cast<std::uint64_t>(ny + 1) * static_cast<std::uint64_t>(nz) * sizeof(float);
+    const auto w_bytes                 = static_cast<std::uint64_t>(nx) * static_cast<std::uint64_t>(ny) * static_cast<std::uint64_t>(nz + 1) * sizeof(float);
 
     auto* density_prev            = static_cast<float*>(desc->temporary_previous_density);
     auto* temperature_prev        = static_cast<float*>(desc->temporary_previous_temperature);
@@ -427,93 +519,39 @@ int32_t visual_simulation_of_smoke_step_cuda(const VisualSimulationOfSmokeStepDe
     auto* w                       = static_cast<float*>(desc->velocity_z);
     auto* coarse_pressure_storage = omega_x;
     auto* coarse_rhs_storage      = omega_y;
-    const dim3 block{static_cast<unsigned>(std::max(block_x, 1)), static_cast<unsigned>(std::max(block_y, 1)), static_cast<unsigned>(std::max(block_z, 1))};
+    const dim3 block(static_cast<unsigned>(std::max(block_x, 1)), static_cast<unsigned>(std::max(block_y, 1)), static_cast<unsigned>(std::max(block_z, 1)));
     const dim3 cells         = make_grid(nx, ny, nz, block);
     const dim3 velocity_grid = make_grid(nx + 1, ny + 1, nz + 1, block);
     const bool cubic         = use_monotonic_cubic != 0u;
     const auto stream        = static_cast<visual_smoke::Stream>(desc->stream);
-    constexpr int max_levels = 16;
-    int level_count          = 1;
-    int level_nx[max_levels]{nx};
-    int level_ny[max_levels]{ny};
-    int level_nz[max_levels]{nz};
-    float* pressure_levels[max_levels]{pressure};
-    float* rhs_levels[max_levels]{divergence};
-    std::uint64_t coarse_offset = 0;
-    while (level_count < max_levels && (level_nx[level_count - 1] > 1 || level_ny[level_count - 1] > 1 || level_nz[level_count - 1] > 1)) {
-        level_nx[level_count]        = std::max(1, (level_nx[level_count - 1] + 1) / 2);
-        level_ny[level_count]        = std::max(1, (level_ny[level_count - 1] + 1) / 2);
-        level_nz[level_count]        = std::max(1, (level_nz[level_count - 1] + 1) / 2);
-        pressure_levels[level_count] = coarse_pressure_storage + coarse_offset;
-        rhs_levels[level_count]      = coarse_rhs_storage + coarse_offset;
-        coarse_offset += static_cast<std::uint64_t>(level_nx[level_count]) * static_cast<std::uint64_t>(level_ny[level_count]) * static_cast<std::uint64_t>(level_nz[level_count]);
-        ++level_count;
-    }
+    const GridHierarchy pressure_hierarchy = build_hierarchy(nx, ny, nz, pressure, divergence, coarse_pressure_storage, coarse_rhs_storage);
 
-    nvtx3::scoped_range step_range{"vsmoke.step"};
+    nvtx3::scoped_range step_range("vsmoke.step");
     {
-        nvtx3::scoped_range range{"vsmoke.step.forces"};
+        nvtx3::scoped_range range("vsmoke.step.forces");
         compute_vorticity_kernel<<<cells, block, 0, stream>>>(u, v, w, omega_x, omega_y, omega_z, omega_mag, nx, ny, nz, cell_size);
         compute_confinement_kernel<<<cells, block, 0, stream>>>(omega_x, omega_y, omega_z, omega_mag, force_x, force_y, force_z, nx, ny, nz, vorticity_epsilon, cell_size);
         apply_forces_kernel<<<velocity_grid, block, 0, stream>>>(u, v, w, density_f, temperature_f, force_x, force_y, force_z, nx, ny, nz, ambient_temperature, density_buoyancy, temperature_buoyancy, dt);
         if (cudaGetLastError() != cudaSuccess) return 5001;
     }
     {
-        nvtx3::scoped_range range{"vsmoke.step.advect_velocity"};
+        nvtx3::scoped_range range("vsmoke.step.advect_velocity");
         advect_velocity_kernel<<<velocity_grid, block, 0, stream>>>(u_prev, v_prev, w_prev, u, v, w, nx, ny, nz, cell_size, dt, cubic);
         if (cudaGetLastError() != cudaSuccess) return 5001;
     }
     {
-        nvtx3::scoped_range range{"vsmoke.step.project"};
+        nvtx3::scoped_range range("vsmoke.step.project");
         if (cudaMemsetAsync(pressure, 0, cell_bytes, stream) != cudaSuccess) return 5001;
         compute_poisson_rhs_kernel<<<cells, block, 0, stream>>>(divergence, u_prev, v_prev, w_prev, nx, ny, nz, cell_size, dt);
         if (cudaGetLastError() != cudaSuccess) return 5001;
-        const int v_cycles        = std::max(1, pressure_iterations / 40);
-        const int smoothing_steps = 1;
-        const int coarse_steps    = std::max(8, pressure_iterations / 10);
-        for (int cycle = 0; cycle < v_cycles; ++cycle) {
-            for (int level = 0; level + 1 < level_count; ++level) {
-                const int lx          = level_nx[level];
-                const int ly          = level_ny[level];
-                const int lz          = level_nz[level];
-                const dim3 level_grid = make_grid(lx, ly, lz, block);
-                for (int smooth = 0; smooth < smoothing_steps; ++smooth) {
-                    poisson_rbgs_kernel<<<level_grid, block, 0, stream>>>(pressure_levels[level], rhs_levels[level], lx, ly, lz, 0);
-                    poisson_rbgs_kernel<<<level_grid, block, 0, stream>>>(pressure_levels[level], rhs_levels[level], lx, ly, lz, 1);
-                }
-                const int cx            = level_nx[level + 1];
-                const int cy            = level_ny[level + 1];
-                const int cz            = level_nz[level + 1];
-                const auto coarse_bytes = static_cast<std::uint64_t>(cx) * static_cast<std::uint64_t>(cy) * static_cast<std::uint64_t>(cz) * sizeof(float);
-                if (cudaMemsetAsync(pressure_levels[level + 1], 0, coarse_bytes, stream) != cudaSuccess) return 5001;
-                restrict_poisson_residual_kernel<<<make_grid(cx, cy, cz, block), block, 0, stream>>>(rhs_levels[level + 1], pressure_levels[level], rhs_levels[level], lx, ly, lz);
-            }
-            {
-                const int level       = level_count - 1;
-                const int lx          = level_nx[level];
-                const int ly          = level_ny[level];
-                const int lz          = level_nz[level];
-                const dim3 level_grid = make_grid(lx, ly, lz, block);
-                for (int smooth = 0; smooth < coarse_steps; ++smooth) {
-                    poisson_rbgs_kernel<<<level_grid, block, 0, stream>>>(pressure_levels[level], rhs_levels[level], lx, ly, lz, 0);
-                    poisson_rbgs_kernel<<<level_grid, block, 0, stream>>>(pressure_levels[level], rhs_levels[level], lx, ly, lz, 1);
-                }
-            }
-            for (int level = level_count - 2; level >= 0; --level) {
-                const int lx          = level_nx[level];
-                const int ly          = level_ny[level];
-                const int lz          = level_nz[level];
-                const int cx          = level_nx[level + 1];
-                const int cy          = level_ny[level + 1];
-                const int cz          = level_nz[level + 1];
-                const dim3 level_grid = make_grid(lx, ly, lz, block);
-                prolongate_add_kernel<<<level_grid, block, 0, stream>>>(pressure_levels[level], pressure_levels[level + 1], lx, ly, lz, cx, cy, cz);
-                for (int smooth = 0; smooth < smoothing_steps; ++smooth) {
-                    poisson_rbgs_kernel<<<level_grid, block, 0, stream>>>(pressure_levels[level], rhs_levels[level], lx, ly, lz, 0);
-                    poisson_rbgs_kernel<<<level_grid, block, 0, stream>>>(pressure_levels[level], rhs_levels[level], lx, ly, lz, 1);
-                }
-            }
-        }
+        const PoissonVCycleOps ops{};
+        const VCycleConfig config{
+            .cycles        = std::max(1, pressure_iterations / 40),
+            .pre_smooth    = 1,
+            .post_smooth   = 1,
+            .coarse_smooth = std::max(8, pressure_iterations / 10),
+        };
+        if (const int32_t code = run_v_cycle(pressure_hierarchy, config, ops, block, stream); code != 0) return code;
         project_velocity_kernel<<<velocity_grid, block, 0, stream>>>(u_prev, v_prev, w_prev, pressure, nx, ny, nz, dt / cell_size);
         if (cudaGetLastError() != cudaSuccess) return 5001;
     }
@@ -523,7 +561,7 @@ int32_t visual_simulation_of_smoke_step_cuda(const VisualSimulationOfSmokeStepDe
     if (cudaMemcpyAsync(density_prev, density_f, cell_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
     if (cudaMemcpyAsync(temperature_prev, temperature_f, cell_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
     {
-        nvtx3::scoped_range range{"vsmoke.step.advect_scalars"};
+        nvtx3::scoped_range range("vsmoke.step.advect_scalars");
         advect_scalars_kernel<<<cells, block, 0, stream>>>(density_f, temperature_f, density_prev, temperature_prev, u, v, w, nx, ny, nz, cell_size, dt, cubic);
         if (cudaGetLastError() != cudaSuccess) return 5001;
     }
