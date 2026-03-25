@@ -95,15 +95,43 @@ int32_t visual_simulation_of_smoke_validate_project_desc(const VisualSimulationO
 
 int32_t visual_simulation_of_smoke_validate_advect_scalars_desc(const VisualSimulationOfSmokeAdvectScalarsDesc* desc) {
     if (desc == nullptr) return 1000;
-    if (const int32_t code = validate_base(desc->struct_size, sizeof(VisualSimulationOfSmokeAdvectScalarsDesc), desc->api_version); code != 0) return code;
+    VisualSimulationOfSmokeScalarFlowBinding bindings[2] = {
+        VisualSimulationOfSmokeScalarFlowBinding{.scalar = desc->density, .temporary_previous_scalar = desc->temporary_previous_density, .clamp_non_negative = 1u},
+        VisualSimulationOfSmokeScalarFlowBinding{.scalar = desc->temperature, .temporary_previous_scalar = desc->temporary_previous_temperature, .clamp_non_negative = 0u},
+    };
+    VisualSimulationOfSmokeAdvectScalarFlowDesc flow_desc{};
+    flow_desc.struct_size = sizeof(VisualSimulationOfSmokeAdvectScalarFlowDesc);
+    flow_desc.api_version = desc->api_version;
+    flow_desc.nx = desc->nx;
+    flow_desc.ny = desc->ny;
+    flow_desc.nz = desc->nz;
+    flow_desc.cell_size = desc->cell_size;
+    flow_desc.dt = desc->dt;
+    flow_desc.use_monotonic_cubic = desc->use_monotonic_cubic;
+    flow_desc.scalar_bindings = bindings;
+    flow_desc.scalar_count = 2;
+    flow_desc.velocity_x = desc->velocity_x;
+    flow_desc.velocity_y = desc->velocity_y;
+    flow_desc.velocity_z = desc->velocity_z;
+    flow_desc.block_x = desc->block_x;
+    flow_desc.block_y = desc->block_y;
+    flow_desc.block_z = desc->block_z;
+    flow_desc.stream = desc->stream;
+    return visual_simulation_of_smoke_validate_advect_scalar_flow_desc(&flow_desc);
+}
+
+int32_t visual_simulation_of_smoke_validate_advect_scalar_flow_desc(const VisualSimulationOfSmokeAdvectScalarFlowDesc* desc) {
+    if (desc == nullptr) return 1000;
+    if (const int32_t code = validate_base(desc->struct_size, sizeof(VisualSimulationOfSmokeAdvectScalarFlowDesc), desc->api_version); code != 0) return code;
     if (const int32_t code = validate_grid(desc->nx, desc->ny, desc->nz, desc->cell_size, desc->dt); code != 0) return code;
-    if (desc->density == nullptr) return 2001;
-    if (desc->temperature == nullptr) return 2002;
+    if (desc->scalar_bindings == nullptr || desc->scalar_count <= 0) return 1000;
     if (desc->velocity_x == nullptr) return 2003;
     if (desc->velocity_y == nullptr) return 2004;
     if (desc->velocity_z == nullptr) return 2005;
-    if (desc->temporary_previous_density == nullptr) return 2007;
-    if (desc->temporary_previous_temperature == nullptr) return 2008;
+    for (int32_t i = 0; i < desc->scalar_count; ++i) {
+        if (desc->scalar_bindings[i].scalar == nullptr) return 2001;
+        if (desc->scalar_bindings[i].temporary_previous_scalar == nullptr) return 2007;
+    }
     return 0;
 }
 

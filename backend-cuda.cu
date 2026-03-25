@@ -372,17 +372,17 @@ namespace visual_smoke {
             }
         }
 
-        __global__ void advect_scalars_kernel(float* density_dst, float* temperature_dst, const float* density_src, const float* temperature_src, const float* u, const float* v, const float* w, int nx, int ny, int nz, float h, float dt, bool cubic) {
+
+        __global__ void advect_scalar_kernel(float* scalar_dst, const float* scalar_src, const float* u, const float* v, const float* w, int nx, int ny, int nz, float h, float dt, bool cubic, int clamp_non_negative) {
             const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
             const int j = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
             const int k = static_cast<int>(blockIdx.z * blockDim.z + threadIdx.z);
-            if (i < nx && j < ny && k < nz) {
-                const float3 pos                           = make_float3((static_cast<float>(i) + 0.5f) * h, (static_cast<float>(j) + 0.5f) * h, (static_cast<float>(k) + 0.5f) * h);
-                const float3 vel                           = sample_velocity(u, v, w, pos, nx, ny, nz, h, cubic);
-                const float3 back                          = clamp_domain(make_float3(pos.x - dt * vel.x, pos.y - dt * vel.y, pos.z - dt * vel.z), nx, ny, nz, h);
-                density_dst[index_3d(i, j, k, nx, ny)]     = fmaxf(0.0f, sample_scalar(density_src, back, nx, ny, nz, h, cubic));
-                temperature_dst[index_3d(i, j, k, nx, ny)] = sample_scalar(temperature_src, back, nx, ny, nz, h, cubic);
-            }
+            if (i >= nx || j >= ny || k >= nz) return;
+            const float3 pos = make_float3((static_cast<float>(i) + 0.5f) * h, (static_cast<float>(j) + 0.5f) * h, (static_cast<float>(k) + 0.5f) * h);
+            const float3 vel = sample_velocity(u, v, w, pos, nx, ny, nz, h, cubic);
+            const float3 back = clamp_domain(make_float3(pos.x - dt * vel.x, pos.y - dt * vel.y, pos.z - dt * vel.z), nx, ny, nz, h);
+            const float value = sample_scalar(scalar_src, back, nx, ny, nz, h, cubic);
+            scalar_dst[index_3d(i, j, k, nx, ny)] = clamp_non_negative != 0 ? fmaxf(0.0f, value) : value;
         }
 
         __global__ void add_scalar_source_kernel(float* destination, int sx, int sy, int sz, float center_x, float center_y, float center_z, float radius, float amount, float sample_offset_x, float sample_offset_y, float sample_offset_z) {
@@ -554,21 +554,49 @@ int32_t visual_simulation_of_smoke_project_cuda(const VisualSimulationOfSmokePro
 }
 
 int32_t visual_simulation_of_smoke_advect_scalars_cuda(const VisualSimulationOfSmokeAdvectScalarsDesc* desc) {
-    using namespace visual_smoke;
     if (const int32_t code = visual_simulation_of_smoke_validate_advect_scalars_desc(desc); code != 0) return code;
+    VisualSimulationOfSmokeScalarFlowBinding bindings[2] = {
+        VisualSimulationOfSmokeScalarFlowBinding{.scalar = desc->density, .temporary_previous_scalar = desc->temporary_previous_density, .clamp_non_negative = 1u},
+        VisualSimulationOfSmokeScalarFlowBinding{.scalar = desc->temperature, .temporary_previous_scalar = desc->temporary_previous_temperature, .clamp_non_negative = 0u},
+    };
+    VisualSimulationOfSmokeAdvectScalarFlowDesc flow_desc{};
+    flow_desc.struct_size = sizeof(VisualSimulationOfSmokeAdvectScalarFlowDesc);
+    flow_desc.api_version = desc->api_version;
+    flow_desc.nx = desc->nx;
+    flow_desc.ny = desc->ny;
+    flow_desc.nz = desc->nz;
+    flow_desc.cell_size = desc->cell_size;
+    flow_desc.dt = desc->dt;
+    flow_desc.use_monotonic_cubic = desc->use_monotonic_cubic;
+    flow_desc.scalar_bindings = bindings;
+    flow_desc.scalar_count = 2;
+    flow_desc.velocity_x = desc->velocity_x;
+    flow_desc.velocity_y = desc->velocity_y;
+    flow_desc.velocity_z = desc->velocity_z;
+    flow_desc.block_x = desc->block_x;
+    flow_desc.block_y = desc->block_y;
+    flow_desc.block_z = desc->block_z;
+    flow_desc.stream = desc->stream;
+    return visual_simulation_of_smoke_advect_scalar_flow_cuda(&flow_desc);
+}
+
+int32_t visual_simulation_of_smoke_advect_scalar_flow_cuda(const VisualSimulationOfSmokeAdvectScalarFlowDesc* desc) {
+    using namespace visual_smoke;
+    if (const int32_t code = visual_simulation_of_smoke_validate_advect_scalar_flow_desc(desc); code != 0) return code;
 
     const dim3 block(static_cast<unsigned>(std::max(desc->block_x, 1)), static_cast<unsigned>(std::max(desc->block_y, 1)), static_cast<unsigned>(std::max(desc->block_z, 1)));
-    const dim3 cells      = make_grid(desc->nx, desc->ny, desc->nz, block);
-    const bool cubic      = desc->use_monotonic_cubic != 0u;
-    const auto stream     = static_cast<Stream>(desc->stream);
+    const dim3 cells = make_grid(desc->nx, desc->ny, desc->nz, block);
+    const bool cubic = desc->use_monotonic_cubic != 0u;
+    const auto stream = static_cast<Stream>(desc->stream);
     const auto cell_bytes = static_cast<std::uint64_t>(desc->nx) * static_cast<std::uint64_t>(desc->ny) * static_cast<std::uint64_t>(desc->nz) * sizeof(float);
 
-    nvtx3::scoped_range range("vsmoke.step.advect_scalars");
-    if (cudaMemcpyAsync(desc->temporary_previous_density, desc->density, cell_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
-    if (cudaMemcpyAsync(desc->temporary_previous_temperature, desc->temperature, cell_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
-    advect_scalars_kernel<<<cells, block, 0, stream>>>(static_cast<float*>(desc->density), static_cast<float*>(desc->temperature), static_cast<float*>(desc->temporary_previous_density), static_cast<float*>(desc->temporary_previous_temperature), static_cast<float*>(desc->velocity_x), static_cast<float*>(desc->velocity_y), static_cast<float*>(desc->velocity_z), desc->nx, desc->ny, desc->nz,
-        desc->cell_size, desc->dt, cubic);
-    if (cudaGetLastError() != cudaSuccess) return 5001;
+    nvtx3::scoped_range range("vsmoke.step.advect_scalar_flow");
+    for (int32_t scalar_index = 0; scalar_index < desc->scalar_count; ++scalar_index) {
+        const auto& binding = desc->scalar_bindings[scalar_index];
+        if (cudaMemcpyAsync(binding.temporary_previous_scalar, binding.scalar, cell_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
+        advect_scalar_kernel<<<cells, block, 0, stream>>>(static_cast<float*>(binding.scalar), static_cast<float*>(binding.temporary_previous_scalar), static_cast<float*>(desc->velocity_x), static_cast<float*>(desc->velocity_y), static_cast<float*>(desc->velocity_z), desc->nx, desc->ny, desc->nz, desc->cell_size, desc->dt, cubic, static_cast<int>(binding.clamp_non_negative));
+        if (cudaGetLastError() != cudaSuccess) return 5001;
+    }
     return 0;
 }
 
