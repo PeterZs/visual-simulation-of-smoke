@@ -24,14 +24,14 @@ namespace {
         const int z = static_cast<int>(blockIdx.z * blockDim.z + threadIdx.z);
         if (x >= nx || y >= ny || z >= nz) return;
 
-        const float dx = (static_cast<float>(x) + 0.5f) - center_x;
-        const float dy = (static_cast<float>(y) + 0.5f) - center_y;
-        const float dz = (static_cast<float>(z) + 0.5f) - center_z;
+        const float dx      = (static_cast<float>(x) + 0.5f) - center_x;
+        const float dy      = (static_cast<float>(y) + 0.5f) - center_y;
+        const float dz      = (static_cast<float>(z) + 0.5f) - center_z;
         const float radius2 = radius * radius;
-        const float dist2 = dx * dx + dy * dy + dz * dz;
+        const float dist2   = dx * dx + dy * dy + dz * dz;
         if (dist2 > radius2) return;
 
-        const auto index = index_3d(x, y, z, nx, ny);
+        const auto index   = index_3d(x, y, z, nx, ny);
         const float weight = fmaxf(0.0f, 1.0f - dist2 / radius2);
         density[index] += density_amount * weight;
         temperature[index] += temperature_amount * weight;
@@ -43,11 +43,11 @@ namespace {
         const int z = static_cast<int>(blockIdx.z * blockDim.z + threadIdx.z);
         if (x > nx || y >= ny || z >= nz) return;
 
-        const float dx = static_cast<float>(x) - center_x;
-        const float dy = (static_cast<float>(y) + 0.5f) - center_y;
-        const float dz = (static_cast<float>(z) + 0.5f) - center_z;
+        const float dx      = static_cast<float>(x) - center_x;
+        const float dy      = (static_cast<float>(y) + 0.5f) - center_y;
+        const float dz      = (static_cast<float>(z) + 0.5f) - center_z;
         const float radius2 = radius * radius;
-        const float dist2 = dx * dx + dy * dy + dz * dz;
+        const float dist2   = dx * dx + dy * dy + dz * dz;
         if (dist2 > radius2) return;
         velocity_x[index_3d(x, y, z, nx + 1, ny)] += amount * fmaxf(0.0f, 1.0f - dist2 / radius2);
     }
@@ -58,11 +58,11 @@ namespace {
         const int z = static_cast<int>(blockIdx.z * blockDim.z + threadIdx.z);
         if (x >= nx || y > ny || z >= nz) return;
 
-        const float dx = (static_cast<float>(x) + 0.5f) - center_x;
-        const float dy = static_cast<float>(y) - center_y;
-        const float dz = (static_cast<float>(z) + 0.5f) - center_z;
+        const float dx      = (static_cast<float>(x) + 0.5f) - center_x;
+        const float dy      = static_cast<float>(y) - center_y;
+        const float dz      = (static_cast<float>(z) + 0.5f) - center_z;
         const float radius2 = radius * radius;
-        const float dist2 = dx * dx + dy * dy + dz * dz;
+        const float dist2   = dx * dx + dy * dy + dz * dz;
         if (dist2 > radius2) return;
         velocity_y[index_3d(x, y, z, nx, ny + 1)] += amount * fmaxf(0.0f, 1.0f - dist2 / radius2);
     }
@@ -73,11 +73,11 @@ namespace {
         const int z = static_cast<int>(blockIdx.z * blockDim.z + threadIdx.z);
         if (x >= nx || y >= ny || z > nz) return;
 
-        const float dx = (static_cast<float>(x) + 0.5f) - center_x;
-        const float dy = (static_cast<float>(y) + 0.5f) - center_y;
-        const float dz = static_cast<float>(z) - center_z;
+        const float dx      = (static_cast<float>(x) + 0.5f) - center_x;
+        const float dy      = (static_cast<float>(y) + 0.5f) - center_y;
+        const float dz      = static_cast<float>(z) - center_z;
         const float radius2 = radius * radius;
-        const float dist2 = dx * dx + dy * dy + dz * dz;
+        const float dist2   = dx * dx + dy * dy + dz * dz;
         if (dist2 > radius2) return;
         velocity_z[index_3d(x, y, z, nx, ny)] += amount * fmaxf(0.0f, 1.0f - dist2 / radius2);
     }
@@ -112,11 +112,11 @@ int main() {
     constexpr uint32_t use_monotonic_cubic = 1u;
     constexpr int32_t frames               = 16;
 
-    const uint64_t scalar_bytes    = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz) * sizeof(float);
+    const uint64_t scalar_bytes     = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz) * sizeof(float);
     const uint64_t velocity_x_bytes = static_cast<uint64_t>(nx + 1) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz) * sizeof(float);
     const uint64_t velocity_y_bytes = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny + 1) * static_cast<uint64_t>(nz) * sizeof(float);
     const uint64_t velocity_z_bytes = static_cast<uint64_t>(nx) * static_cast<uint64_t>(ny) * static_cast<uint64_t>(nz + 1) * sizeof(float);
-    const std::size_t scalar_count = static_cast<std::size_t>(scalar_bytes / sizeof(float));
+    const std::size_t scalar_count  = static_cast<std::size_t>(scalar_bytes / sizeof(float));
 
     float* density                        = nullptr;
     float* temperature                    = nullptr;
