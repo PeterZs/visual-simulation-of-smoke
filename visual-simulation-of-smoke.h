@@ -94,8 +94,111 @@ typedef struct VisualSimulationOfSmokeStepDesc {
     void* stream;
 } VisualSimulationOfSmokeStepDesc;
 
+typedef struct VisualSimulationOfSmokeForcesDesc {
+    uint32_t struct_size;
+    uint32_t api_version;
+    int32_t nx;
+    int32_t ny;
+    int32_t nz;
+    float cell_size;
+    float dt;
+    float ambient_temperature;
+    float density_buoyancy;
+    float temperature_buoyancy;
+    float vorticity_epsilon;
+    void* density;
+    void* temperature;
+    void* velocity_x;
+    void* velocity_y;
+    void* velocity_z;
+    void* temporary_omega_x;
+    void* temporary_omega_y;
+    void* temporary_omega_z;
+    void* temporary_omega_magnitude;
+    void* temporary_force_x;
+    void* temporary_force_y;
+    void* temporary_force_z;
+    int32_t block_x;
+    int32_t block_y;
+    int32_t block_z;
+    void* stream;
+} VisualSimulationOfSmokeForcesDesc;
+
+typedef struct VisualSimulationOfSmokeAdvectVelocityDesc {
+    uint32_t struct_size;
+    uint32_t api_version;
+    int32_t nx;
+    int32_t ny;
+    int32_t nz;
+    float cell_size;
+    float dt;
+    uint32_t use_monotonic_cubic;
+    void* velocity_x;
+    void* velocity_y;
+    void* velocity_z;
+    void* temporary_previous_velocity_x;
+    void* temporary_previous_velocity_y;
+    void* temporary_previous_velocity_z;
+    int32_t block_x;
+    int32_t block_y;
+    int32_t block_z;
+    void* stream;
+} VisualSimulationOfSmokeAdvectVelocityDesc;
+
+typedef struct VisualSimulationOfSmokeProjectDesc {
+    uint32_t struct_size;
+    uint32_t api_version;
+    int32_t nx;
+    int32_t ny;
+    int32_t nz;
+    float cell_size;
+    float dt;
+    int32_t pressure_iterations;
+    void* temporary_previous_velocity_x;
+    void* temporary_previous_velocity_y;
+    void* temporary_previous_velocity_z;
+    void* temporary_pressure;
+    void* temporary_divergence;
+    void* temporary_omega_x;
+    void* temporary_omega_y;
+    int32_t block_x;
+    int32_t block_y;
+    int32_t block_z;
+    void* stream;
+} VisualSimulationOfSmokeProjectDesc;
+
+typedef struct VisualSimulationOfSmokeAdvectScalarsDesc {
+    uint32_t struct_size;
+    uint32_t api_version;
+    int32_t nx;
+    int32_t ny;
+    int32_t nz;
+    float cell_size;
+    float dt;
+    uint32_t use_monotonic_cubic;
+    void* density;
+    void* temperature;
+    void* velocity_x;
+    void* velocity_y;
+    void* velocity_z;
+    void* temporary_previous_density;
+    void* temporary_previous_temperature;
+    int32_t block_x;
+    int32_t block_y;
+    int32_t block_z;
+    void* stream;
+} VisualSimulationOfSmokeAdvectScalarsDesc;
+
 VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_validate_desc(const VisualSimulationOfSmokeStepDesc* desc);
-VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_step_cuda(const VisualSimulationOfSmokeStepDesc* desc);
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_validate_forces_desc(const VisualSimulationOfSmokeForcesDesc* desc);
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_validate_advect_velocity_desc(const VisualSimulationOfSmokeAdvectVelocityDesc* desc);
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_validate_project_desc(const VisualSimulationOfSmokeProjectDesc* desc);
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_validate_advect_scalars_desc(const VisualSimulationOfSmokeAdvectScalarsDesc* desc);
+
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_forces_cuda(const VisualSimulationOfSmokeForcesDesc* desc);
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_advect_velocity_cuda(const VisualSimulationOfSmokeAdvectVelocityDesc* desc);
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_project_cuda(const VisualSimulationOfSmokeProjectDesc* desc);
+VISUAL_SIMULATION_OF_SMOKE_API int32_t visual_simulation_of_smoke_advect_scalars_cuda(const VisualSimulationOfSmokeAdvectScalarsDesc* desc);
 
 #ifdef __cplusplus
 }

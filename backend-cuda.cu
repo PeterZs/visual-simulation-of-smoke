@@ -477,95 +477,82 @@ namespace visual_smoke {
 
 extern "C" {
 
-int32_t visual_simulation_of_smoke_step_cuda(const VisualSimulationOfSmokeStepDesc* desc) {
+int32_t visual_simulation_of_smoke_forces_cuda(const VisualSimulationOfSmokeForcesDesc* desc) {
     using namespace visual_smoke;
-    const int32_t nx                   = desc->nx;
-    const int32_t ny                   = desc->ny;
-    const int32_t nz                   = desc->nz;
-    const float cell_size              = desc->cell_size;
-    const float dt                     = desc->dt;
-    const float ambient_temperature    = desc->ambient_temperature;
-    const float density_buoyancy       = desc->density_buoyancy;
-    const float temperature_buoyancy   = desc->temperature_buoyancy;
-    const float vorticity_epsilon      = desc->vorticity_epsilon;
-    const int32_t pressure_iterations  = desc->pressure_iterations;
-    const int32_t block_x              = desc->block_x;
-    const int32_t block_y              = desc->block_y;
-    const int32_t block_z              = desc->block_z;
-    const uint32_t use_monotonic_cubic = desc->use_monotonic_cubic;
-    const auto cell_bytes              = static_cast<std::uint64_t>(nx) * static_cast<std::uint64_t>(ny) * static_cast<std::uint64_t>(nz) * sizeof(float);
-    const auto u_bytes                 = static_cast<std::uint64_t>(nx + 1) * static_cast<std::uint64_t>(ny) * static_cast<std::uint64_t>(nz) * sizeof(float);
-    const auto v_bytes                 = static_cast<std::uint64_t>(nx) * static_cast<std::uint64_t>(ny + 1) * static_cast<std::uint64_t>(nz) * sizeof(float);
-    const auto w_bytes                 = static_cast<std::uint64_t>(nx) * static_cast<std::uint64_t>(ny) * static_cast<std::uint64_t>(nz + 1) * sizeof(float);
+    if (const int32_t code = visual_simulation_of_smoke_validate_forces_desc(desc); code != 0) return code;
 
-    auto* density_prev            = static_cast<float*>(desc->temporary_previous_density);
-    auto* temperature_prev        = static_cast<float*>(desc->temporary_previous_temperature);
-    auto* u_prev                  = static_cast<float*>(desc->temporary_previous_velocity_x);
-    auto* v_prev                  = static_cast<float*>(desc->temporary_previous_velocity_y);
-    auto* w_prev                  = static_cast<float*>(desc->temporary_previous_velocity_z);
-    auto* pressure                = static_cast<float*>(desc->temporary_pressure);
-    auto* divergence              = static_cast<float*>(desc->temporary_divergence);
-    auto* omega_x                 = static_cast<float*>(desc->temporary_omega_x);
-    auto* omega_y                 = static_cast<float*>(desc->temporary_omega_y);
-    auto* omega_z                 = static_cast<float*>(desc->temporary_omega_z);
-    auto* omega_mag               = static_cast<float*>(desc->temporary_omega_magnitude);
-    auto* force_x                 = static_cast<float*>(desc->temporary_force_x);
-    auto* force_y                 = static_cast<float*>(desc->temporary_force_y);
-    auto* force_z                 = static_cast<float*>(desc->temporary_force_z);
-    auto* density_f               = static_cast<float*>(desc->density);
-    auto* temperature_f           = static_cast<float*>(desc->temperature);
-    auto* u                       = static_cast<float*>(desc->velocity_x);
-    auto* v                       = static_cast<float*>(desc->velocity_y);
-    auto* w                       = static_cast<float*>(desc->velocity_z);
-    auto* coarse_pressure_storage = omega_x;
-    auto* coarse_rhs_storage      = omega_y;
-    const dim3 block(static_cast<unsigned>(std::max(block_x, 1)), static_cast<unsigned>(std::max(block_y, 1)), static_cast<unsigned>(std::max(block_z, 1)));
-    const dim3 cells         = make_grid(nx, ny, nz, block);
-    const dim3 velocity_grid = make_grid(nx + 1, ny + 1, nz + 1, block);
-    const bool cubic         = use_monotonic_cubic != 0u;
-    const auto stream        = static_cast<visual_smoke::Stream>(desc->stream);
-    const GridHierarchy pressure_hierarchy = build_hierarchy(nx, ny, nz, pressure, divergence, coarse_pressure_storage, coarse_rhs_storage);
+    const dim3 block(static_cast<unsigned>(std::max(desc->block_x, 1)), static_cast<unsigned>(std::max(desc->block_y, 1)), static_cast<unsigned>(std::max(desc->block_z, 1)));
+    const dim3 cells         = make_grid(desc->nx, desc->ny, desc->nz, block);
+    const dim3 velocity_grid = make_grid(desc->nx + 1, desc->ny + 1, desc->nz + 1, block);
+    const auto stream        = static_cast<Stream>(desc->stream);
 
-    nvtx3::scoped_range step_range("vsmoke.step");
-    {
-        nvtx3::scoped_range range("vsmoke.step.forces");
-        compute_vorticity_kernel<<<cells, block, 0, stream>>>(u, v, w, omega_x, omega_y, omega_z, omega_mag, nx, ny, nz, cell_size);
-        compute_confinement_kernel<<<cells, block, 0, stream>>>(omega_x, omega_y, omega_z, omega_mag, force_x, force_y, force_z, nx, ny, nz, vorticity_epsilon, cell_size);
-        apply_forces_kernel<<<velocity_grid, block, 0, stream>>>(u, v, w, density_f, temperature_f, force_x, force_y, force_z, nx, ny, nz, ambient_temperature, density_buoyancy, temperature_buoyancy, dt);
-        if (cudaGetLastError() != cudaSuccess) return 5001;
-    }
-    {
-        nvtx3::scoped_range range("vsmoke.step.advect_velocity");
-        advect_velocity_kernel<<<velocity_grid, block, 0, stream>>>(u_prev, v_prev, w_prev, u, v, w, nx, ny, nz, cell_size, dt, cubic);
-        if (cudaGetLastError() != cudaSuccess) return 5001;
-    }
-    {
-        nvtx3::scoped_range range("vsmoke.step.project");
-        if (cudaMemsetAsync(pressure, 0, cell_bytes, stream) != cudaSuccess) return 5001;
-        compute_poisson_rhs_kernel<<<cells, block, 0, stream>>>(divergence, u_prev, v_prev, w_prev, nx, ny, nz, cell_size, dt);
-        if (cudaGetLastError() != cudaSuccess) return 5001;
-        const PoissonVCycleOps ops{};
-        const VCycleConfig config{
-            .cycles        = std::max(1, pressure_iterations / 40),
-            .pre_smooth    = 1,
-            .post_smooth   = 1,
-            .coarse_smooth = std::max(8, pressure_iterations / 10),
-        };
-        if (const int32_t code = run_v_cycle(pressure_hierarchy, config, ops, block, stream); code != 0) return code;
-        project_velocity_kernel<<<velocity_grid, block, 0, stream>>>(u_prev, v_prev, w_prev, pressure, nx, ny, nz, dt / cell_size);
-        if (cudaGetLastError() != cudaSuccess) return 5001;
-    }
-    if (cudaMemcpyAsync(u, u_prev, u_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
-    if (cudaMemcpyAsync(v, v_prev, v_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
-    if (cudaMemcpyAsync(w, w_prev, w_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
-    if (cudaMemcpyAsync(density_prev, density_f, cell_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
-    if (cudaMemcpyAsync(temperature_prev, temperature_f, cell_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
-    {
-        nvtx3::scoped_range range("vsmoke.step.advect_scalars");
-        advect_scalars_kernel<<<cells, block, 0, stream>>>(density_f, temperature_f, density_prev, temperature_prev, u, v, w, nx, ny, nz, cell_size, dt, cubic);
-        if (cudaGetLastError() != cudaSuccess) return 5001;
-    }
+    nvtx3::scoped_range range("vsmoke.step.forces");
+    compute_vorticity_kernel<<<cells, block, 0, stream>>>(static_cast<float*>(desc->velocity_x), static_cast<float*>(desc->velocity_y), static_cast<float*>(desc->velocity_z), static_cast<float*>(desc->temporary_omega_x), static_cast<float*>(desc->temporary_omega_y), static_cast<float*>(desc->temporary_omega_z), static_cast<float*>(desc->temporary_omega_magnitude), desc->nx, desc->ny, desc->nz, desc->cell_size);
+    compute_confinement_kernel<<<cells, block, 0, stream>>>(static_cast<float*>(desc->temporary_omega_x), static_cast<float*>(desc->temporary_omega_y), static_cast<float*>(desc->temporary_omega_z), static_cast<float*>(desc->temporary_omega_magnitude), static_cast<float*>(desc->temporary_force_x), static_cast<float*>(desc->temporary_force_y), static_cast<float*>(desc->temporary_force_z), desc->nx, desc->ny, desc->nz, desc->vorticity_epsilon,
+        desc->cell_size);
+    apply_forces_kernel<<<velocity_grid, block, 0, stream>>>(static_cast<float*>(desc->velocity_x), static_cast<float*>(desc->velocity_y), static_cast<float*>(desc->velocity_z), static_cast<float*>(desc->density), static_cast<float*>(desc->temperature), static_cast<float*>(desc->temporary_force_x), static_cast<float*>(desc->temporary_force_y), static_cast<float*>(desc->temporary_force_z), desc->nx, desc->ny,
+        desc->nz, desc->ambient_temperature, desc->density_buoyancy, desc->temperature_buoyancy, desc->dt);
+    if (cudaGetLastError() != cudaSuccess) return 5001;
     return 0;
 }
+
+int32_t visual_simulation_of_smoke_advect_velocity_cuda(const VisualSimulationOfSmokeAdvectVelocityDesc* desc) {
+    using namespace visual_smoke;
+    if (const int32_t code = visual_simulation_of_smoke_validate_advect_velocity_desc(desc); code != 0) return code;
+
+    const dim3 block(static_cast<unsigned>(std::max(desc->block_x, 1)), static_cast<unsigned>(std::max(desc->block_y, 1)), static_cast<unsigned>(std::max(desc->block_z, 1)));
+    const dim3 velocity_grid = make_grid(desc->nx + 1, desc->ny + 1, desc->nz + 1, block);
+    const bool cubic         = desc->use_monotonic_cubic != 0u;
+    const auto stream        = static_cast<Stream>(desc->stream);
+
+    nvtx3::scoped_range range("vsmoke.step.advect_velocity");
+    advect_velocity_kernel<<<velocity_grid, block, 0, stream>>>(static_cast<float*>(desc->temporary_previous_velocity_x), static_cast<float*>(desc->temporary_previous_velocity_y), static_cast<float*>(desc->temporary_previous_velocity_z), static_cast<float*>(desc->velocity_x), static_cast<float*>(desc->velocity_y), static_cast<float*>(desc->velocity_z), desc->nx, desc->ny, desc->nz, desc->cell_size,
+        desc->dt, cubic);
+    if (cudaGetLastError() != cudaSuccess) return 5001;
+    return 0;
+}
+
+int32_t visual_simulation_of_smoke_project_cuda(const VisualSimulationOfSmokeProjectDesc* desc) {
+    using namespace visual_smoke;
+    if (const int32_t code = visual_simulation_of_smoke_validate_project_desc(desc); code != 0) return code;
+
+    const dim3 block(static_cast<unsigned>(std::max(desc->block_x, 1)), static_cast<unsigned>(std::max(desc->block_y, 1)), static_cast<unsigned>(std::max(desc->block_z, 1)));
+    const dim3 cells         = make_grid(desc->nx, desc->ny, desc->nz, block);
+    const dim3 velocity_grid = make_grid(desc->nx + 1, desc->ny + 1, desc->nz + 1, block);
+    const auto stream        = static_cast<Stream>(desc->stream);
+    const auto cell_bytes    = static_cast<std::uint64_t>(desc->nx) * static_cast<std::uint64_t>(desc->ny) * static_cast<std::uint64_t>(desc->nz) * sizeof(float);
+    const GridHierarchy pressure_hierarchy = build_hierarchy(desc->nx, desc->ny, desc->nz, static_cast<float*>(desc->temporary_pressure), static_cast<float*>(desc->temporary_divergence), static_cast<float*>(desc->temporary_omega_x), static_cast<float*>(desc->temporary_omega_y));
+
+    nvtx3::scoped_range range("vsmoke.step.project");
+    if (cudaMemsetAsync(desc->temporary_pressure, 0, cell_bytes, stream) != cudaSuccess) return 5001;
+    compute_poisson_rhs_kernel<<<cells, block, 0, stream>>>(static_cast<float*>(desc->temporary_divergence), static_cast<float*>(desc->temporary_previous_velocity_x), static_cast<float*>(desc->temporary_previous_velocity_y), static_cast<float*>(desc->temporary_previous_velocity_z), desc->nx, desc->ny, desc->nz, desc->cell_size, desc->dt);
+    if (cudaGetLastError() != cudaSuccess) return 5001;
+    const PoissonVCycleOps ops{};
+    const VCycleConfig config{.cycles = std::max(1, desc->pressure_iterations / 40), .pre_smooth = 1, .post_smooth = 1, .coarse_smooth = std::max(8, desc->pressure_iterations / 10)};
+    if (const int32_t code = run_v_cycle(pressure_hierarchy, config, ops, block, stream); code != 0) return code;
+    project_velocity_kernel<<<velocity_grid, block, 0, stream>>>(static_cast<float*>(desc->temporary_previous_velocity_x), static_cast<float*>(desc->temporary_previous_velocity_y), static_cast<float*>(desc->temporary_previous_velocity_z), static_cast<float*>(desc->temporary_pressure), desc->nx, desc->ny, desc->nz, desc->dt / desc->cell_size);
+    if (cudaGetLastError() != cudaSuccess) return 5001;
+    return 0;
+}
+
+int32_t visual_simulation_of_smoke_advect_scalars_cuda(const VisualSimulationOfSmokeAdvectScalarsDesc* desc) {
+    using namespace visual_smoke;
+    if (const int32_t code = visual_simulation_of_smoke_validate_advect_scalars_desc(desc); code != 0) return code;
+
+    const dim3 block(static_cast<unsigned>(std::max(desc->block_x, 1)), static_cast<unsigned>(std::max(desc->block_y, 1)), static_cast<unsigned>(std::max(desc->block_z, 1)));
+    const dim3 cells      = make_grid(desc->nx, desc->ny, desc->nz, block);
+    const bool cubic      = desc->use_monotonic_cubic != 0u;
+    const auto stream     = static_cast<Stream>(desc->stream);
+    const auto cell_bytes = static_cast<std::uint64_t>(desc->nx) * static_cast<std::uint64_t>(desc->ny) * static_cast<std::uint64_t>(desc->nz) * sizeof(float);
+
+    nvtx3::scoped_range range("vsmoke.step.advect_scalars");
+    if (cudaMemcpyAsync(desc->temporary_previous_density, desc->density, cell_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
+    if (cudaMemcpyAsync(desc->temporary_previous_temperature, desc->temperature, cell_bytes, cudaMemcpyDeviceToDevice, stream) != cudaSuccess) return 5001;
+    advect_scalars_kernel<<<cells, block, 0, stream>>>(static_cast<float*>(desc->density), static_cast<float*>(desc->temperature), static_cast<float*>(desc->temporary_previous_density), static_cast<float*>(desc->temporary_previous_temperature), static_cast<float*>(desc->velocity_x), static_cast<float*>(desc->velocity_y), static_cast<float*>(desc->velocity_z), desc->nx, desc->ny, desc->nz,
+        desc->cell_size, desc->dt, cubic);
+    if (cudaGetLastError() != cudaSuccess) return 5001;
+    return 0;
+}
+
 
 } // extern "C"
