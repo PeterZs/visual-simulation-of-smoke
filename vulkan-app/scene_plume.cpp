@@ -186,11 +186,6 @@ namespace scene_plume {
         if (context_ != nullptr) smoke_simulation_destroy_context_cuda(context_);
         if (density_source_device_ != nullptr) cudaFree(density_source_device_);
         if (temperature_source_device_ != nullptr) cudaFree(temperature_source_device_);
-        if (occupancy_device_ != nullptr) cudaFree(occupancy_device_);
-        if (solid_velocity_x_device_ != nullptr) cudaFree(solid_velocity_x_device_);
-        if (solid_velocity_y_device_ != nullptr) cudaFree(solid_velocity_y_device_);
-        if (solid_velocity_z_device_ != nullptr) cudaFree(solid_velocity_z_device_);
-        if (solid_temperature_device_ != nullptr) cudaFree(solid_temperature_device_);
         if (stream_ != nullptr) cudaStreamDestroy(stream_);
     }
 
@@ -228,21 +223,10 @@ namespace scene_plume {
         if (context_ != nullptr) check_smoke(smoke_simulation_destroy_context_cuda(context_), "smoke_simulation_destroy_context_cuda");
         if (density_source_device_ != nullptr) cudaFree(density_source_device_);
         if (temperature_source_device_ != nullptr) cudaFree(temperature_source_device_);
-        if (occupancy_device_ != nullptr) cudaFree(occupancy_device_);
-        if (solid_velocity_x_device_ != nullptr) cudaFree(solid_velocity_x_device_);
-        if (solid_velocity_y_device_ != nullptr) cudaFree(solid_velocity_y_device_);
-        if (solid_velocity_z_device_ != nullptr) cudaFree(solid_velocity_z_device_);
-        if (solid_temperature_device_ != nullptr) cudaFree(solid_temperature_device_);
 
         context_                    = nullptr;
         density_source_device_      = nullptr;
         temperature_source_device_  = nullptr;
-        occupancy_device_           = nullptr;
-        solid_velocity_x_device_    = nullptr;
-        solid_velocity_y_device_    = nullptr;
-        solid_velocity_z_device_    = nullptr;
-        solid_temperature_device_   = nullptr;
-        animation_step_             = 0;
 
         const SmokeSimulationContextCreateDesc create_desc{
             .config              = config_,
@@ -270,11 +254,6 @@ namespace scene_plume {
 
         density_source_host_.assign(cell_count, 0.0f);
         temperature_source_host_.assign(cell_count, 0.0f);
-        occupancy_host_.assign(cell_count, static_cast<uint8_t>(0));
-        solid_velocity_x_host_.assign(cell_count, 0.0f);
-        solid_velocity_y_host_.assign(cell_count, 0.0f);
-        solid_velocity_z_host_.assign(cell_count, 0.0f);
-        solid_temperature_host_.assign(cell_count, config_.ambient_temperature);
 
         const float emitter_x = extent_x * 0.50f;
         const float emitter_y = extent_y * 0.10f;
@@ -304,19 +283,9 @@ namespace scene_plume {
 
         check_cuda(cudaMalloc(reinterpret_cast<void**>(&density_source_device_), scalar_bytes), "cudaMalloc density_source_device");
         check_cuda(cudaMalloc(reinterpret_cast<void**>(&temperature_source_device_), scalar_bytes), "cudaMalloc temperature_source_device");
-        check_cuda(cudaMalloc(reinterpret_cast<void**>(&occupancy_device_), cell_count * sizeof(uint8_t)), "cudaMalloc occupancy_device");
-        check_cuda(cudaMalloc(reinterpret_cast<void**>(&solid_velocity_x_device_), scalar_bytes), "cudaMalloc solid_velocity_x_device");
-        check_cuda(cudaMalloc(reinterpret_cast<void**>(&solid_velocity_y_device_), scalar_bytes), "cudaMalloc solid_velocity_y_device");
-        check_cuda(cudaMalloc(reinterpret_cast<void**>(&solid_velocity_z_device_), scalar_bytes), "cudaMalloc solid_velocity_z_device");
-        check_cuda(cudaMalloc(reinterpret_cast<void**>(&solid_temperature_device_), scalar_bytes), "cudaMalloc solid_temperature_device");
 
         check_cuda(cudaMemcpyAsync(density_source_device_, density_source_host_.data(), scalar_bytes, cudaMemcpyHostToDevice, stream_), "cudaMemcpyAsync density_source_device");
         check_cuda(cudaMemcpyAsync(temperature_source_device_, temperature_source_host_.data(), scalar_bytes, cudaMemcpyHostToDevice, stream_), "cudaMemcpyAsync temperature_source_device");
-        check_cuda(cudaMemsetAsync(occupancy_device_, 0, cell_count * sizeof(uint8_t), stream_), "cudaMemsetAsync occupancy_device");
-        check_cuda(cudaMemsetAsync(solid_velocity_x_device_, 0, scalar_bytes, stream_), "cudaMemsetAsync solid_velocity_x_device");
-        check_cuda(cudaMemsetAsync(solid_velocity_y_device_, 0, scalar_bytes, stream_), "cudaMemsetAsync solid_velocity_y_device");
-        check_cuda(cudaMemsetAsync(solid_velocity_z_device_, 0, scalar_bytes, stream_), "cudaMemsetAsync solid_velocity_z_device");
-        check_cuda(cudaMemcpyAsync(solid_temperature_device_, solid_temperature_host_.data(), scalar_bytes, cudaMemcpyHostToDevice, stream_), "cudaMemcpyAsync solid_temperature_device");
 
         info_ = {
             .grid              = grid_,
@@ -346,7 +315,6 @@ namespace scene_plume {
             check_smoke(smoke_simulation_step_cuda(context_, &step_desc), "smoke_simulation_step_cuda");
             info_.last_step_call_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
             ++info_.step_count;
-            ++animation_step_;
         }
     }
 

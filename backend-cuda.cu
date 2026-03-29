@@ -900,45 +900,6 @@ namespace smoke_simulation {
         divergence[index] = (u[u_index(x + 1, y, z, nx, ny)] - u[u_index(x, y, z, nx, ny)] + v[v_index(x, y + 1, z, nx, ny)] - v[v_index(x, y, z, nx, ny)] + w[w_index(x, y, z + 1, nx, ny)] - w[w_index(x, y, z, nx, ny)]) / h;
     }
 
-    __global__ void apply_poisson_matrix_kernel(float* destination, const float* pressure, const uint8_t* occupancy, const int anchor_row, const int nx, const int ny, const int nz, const float h, const SmokeSimulationBoundaryConfig boundary) {
-        const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-        const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
-        const int z = static_cast<int>(blockIdx.z * blockDim.z + threadIdx.z);
-        if (x >= nx || y >= ny || z >= nz) return;
-        const auto index = cell_index(x, y, z, nx, ny);
-        if (static_cast<int>(index) == anchor_row) {
-            destination[index] = pressure[index];
-            return;
-        }
-        if (occupancy != nullptr && occupancy[index] != 0) {
-            destination[index] = 0.0f;
-            return;
-        }
-
-        float diagonal = 0.0f;
-        float sum = 0.0f;
-        const int offsets[6][3] = {
-            {-1, 0, 0},
-            {1, 0, 0},
-            {0, -1, 0},
-            {0, 1, 0},
-            {0, 0, -1},
-            {0, 0, 1},
-        };
-        for (const auto& offset : offsets) {
-            int nx_cell = x + offset[0];
-            int ny_cell = y + offset[1];
-            int nz_cell = z + offset[2];
-            if (!resolve_cell_coordinates(nx_cell, ny_cell, nz_cell, nx, ny, nz, boundary)) continue;
-            const auto neighbor_index = cell_index(nx_cell, ny_cell, nz_cell, nx, ny);
-            if (occupancy != nullptr && occupancy[neighbor_index] != 0) continue;
-            diagonal += 1.0f;
-            if (static_cast<int>(neighbor_index) == anchor_row) continue;
-            sum += pressure[neighbor_index];
-        }
-        destination[index] = (diagonal * pressure[index] - sum) / (h * h);
-    }
-
     __global__ void rbgs_pressure_kernel(float* pressure, const float* rhs, const uint8_t* occupancy, const int anchor_row, const int parity, const int nx, const int ny, const int nz, const float h, const SmokeSimulationBoundaryConfig boundary) {
         const int x = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
         const int y = static_cast<int>(blockIdx.y * blockDim.y + threadIdx.y);
@@ -1126,12 +1087,6 @@ namespace smoke_simulation {
         destination[count * 2u + index] = cell_z[index];
     }
 
-    __global__ void copy_float_kernel(float* destination, const float* source, const std::uint64_t count) {
-        const auto index = static_cast<std::uint64_t>(blockIdx.x) * static_cast<std::uint64_t>(blockDim.x) + static_cast<std::uint64_t>(threadIdx.x);
-        if (index >= count) return;
-        destination[index] = source[index];
-    }
-
     void destroy_buffers(ContextStorage& context) {
         auto free_ptr = [](auto* pointer) {
             if (pointer != nullptr) cudaFree(pointer);
@@ -1187,14 +1142,6 @@ namespace smoke_simulation {
         check_cuda(cudaGetLastError(), "fill_float_kernel");
     }
 
-    void launch_copy(float* destination, const float* source, const std::uint64_t count, cudaStream_t stream) {
-        if (count == 0) return;
-        const int block_size = 256;
-        const int grid_size  = static_cast<int>((count + static_cast<std::uint64_t>(block_size) - 1) / static_cast<std::uint64_t>(block_size));
-        copy_float_kernel<<<grid_size, block_size, 0, stream>>>(destination, source, count);
-        check_cuda(cudaGetLastError(), "copy_float_kernel");
-    }
-
     void update_pressure_anchor(ContextStorage& context) {
         if (context.occupancy_host.size() != context.cell_count) context.occupancy_host.resize(context.cell_count);
         check_cuda(cudaMemcpy(context.occupancy_host.data(), context.scalar.occupancy, context.cell_count * sizeof(uint8_t), cudaMemcpyDeviceToHost), "cudaMemcpy occupancy_host");
@@ -1244,7 +1191,6 @@ namespace smoke_simulation {
     }
 
     void solve_pressure(ContextStorage& context) {
-        update_pressure_anchor(context);
         check_cuda(cudaMemsetAsync(context.scalar.pressure_rhs + context.pressure_anchor, 0, sizeof(float), context.stream), "cudaMemsetAsync pressure_rhs anchor");
         for (int iteration = 0; iteration < std::max(context.config.pressure_iterations, 1); ++iteration) {
             rbgs_pressure_kernel<<<context.cell_grid, context.block, 0, context.stream>>>(context.scalar.pressure, context.scalar.pressure_rhs, context.scalar.occupancy, context.pressure_anchor, 0, context.config.nx, context.config.ny, context.config.nz, context.config.cell_size, context.config.boundary);
@@ -1380,10 +1326,12 @@ SmokeSimulationResult smoke_simulation_step_cuda(SmokeSimulationContext context,
         nvtx3::scoped_range range("smoke.step");
         if (desc != nullptr && desc->occupancy != nullptr) {
             smoke_simulation::check_cuda(cudaMemcpyAsync(storage.scalar.occupancy, desc->occupancy, storage.cell_count * sizeof(uint8_t), cudaMemcpyDeviceToDevice, storage.stream), "cudaMemcpyAsync occupancy");
+            smoke_simulation::check_cuda(cudaStreamSynchronize(storage.stream), "cudaStreamSynchronize occupancy");
+            smoke_simulation::update_pressure_anchor(storage);
         } else {
             smoke_simulation::check_cuda(cudaMemsetAsync(storage.scalar.occupancy, 0, storage.cell_count * sizeof(uint8_t), storage.stream), "cudaMemsetAsync occupancy");
+            storage.pressure_anchor = 0;
         }
-        smoke_simulation::update_pressure_anchor(storage);
 
         smoke_simulation::apply_solid_temperature_kernel<<<static_cast<unsigned>((storage.cell_count + 255u) / 256u), 256, 0, storage.stream>>>(storage.scalar.temperature, storage.scalar.occupancy, desc != nullptr ? desc->solid_temperature : nullptr, storage.config.nx, storage.config.ny, storage.config.nz, storage.config.ambient_temperature);
         smoke_simulation::check_cuda(cudaGetLastError(), "apply_solid_temperature_kernel pre");

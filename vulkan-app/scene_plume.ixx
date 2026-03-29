@@ -38,7 +38,6 @@ export namespace scene_plume {
             .cell_size                   = 0.01f,
             .dt                          = 1.0f / 90.0f,
             .pressure_iterations         = 160,
-            .pressure_tolerance          = 1.0e-4f,
             .ambient_temperature         = 0.0f,
             .buoyancy_density_factor     = 0.16f,
             .buoyancy_temperature_factor = 1.25f,
@@ -61,21 +60,9 @@ export namespace scene_plume {
 
         float* density_source_device_     = nullptr;
         float* temperature_source_device_ = nullptr;
-        uint8_t* occupancy_device_        = nullptr;
-        float* solid_velocity_x_device_   = nullptr;
-        float* solid_velocity_y_device_   = nullptr;
-        float* solid_velocity_z_device_   = nullptr;
-        float* solid_temperature_device_  = nullptr;
 
         std::vector<float> density_source_host_{};
         std::vector<float> temperature_source_host_{};
-        std::vector<uint8_t> occupancy_host_{};
-        std::vector<float> solid_velocity_x_host_{};
-        std::vector<float> solid_velocity_y_host_{};
-        std::vector<float> solid_velocity_z_host_{};
-        std::vector<float> solid_temperature_host_{};
-
-        uint64_t animation_step_ = 0;
         app::SceneInfo info_{};
     };
 

@@ -4,7 +4,6 @@
 #include <nvtx3/nvtx3.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -21,7 +20,6 @@ int main(int argc, char** argv) {
     int pressure_iterations  = 64;
     float cell_size          = 0.01f;
     float dt                 = 1.0f / 90.0f;
-    float pressure_tolerance = 1.0e-4f;
     float ambient_temperature = 0.0f;
     float buoyancy_density    = 0.15f;
     float buoyancy_temperature = 1.2f;
@@ -43,7 +41,6 @@ int main(int argc, char** argv) {
         else if (arg == "--pressure-iters") pressure_iterations = std::atoi(next_value("--pressure-iters"));
         else if (arg == "--cell-size") cell_size = std::strtof(next_value("--cell-size"), nullptr);
         else if (arg == "--dt") dt = std::strtof(next_value("--dt"), nullptr);
-        else if (arg == "--pressure-tol") pressure_tolerance = std::strtof(next_value("--pressure-tol"), nullptr);
         else if (arg == "--ambient-temperature") ambient_temperature = std::strtof(next_value("--ambient-temperature"), nullptr);
         else if (arg == "--buoyancy-density") buoyancy_density = std::strtof(next_value("--buoyancy-density"), nullptr);
         else if (arg == "--buoyancy-temperature") buoyancy_temperature = std::strtof(next_value("--buoyancy-temperature"), nullptr);
@@ -53,7 +50,7 @@ int main(int argc, char** argv) {
             std::printf(
                 "visual-simulation-of-smoke-benchmark [--nx N] [--ny N] [--nz N] [--warmup N] [--steps N]\n"
                 "                        [--pressure-iters N] [--cell-size H] [--dt DT]\n"
-                "                        [--pressure-tol EPS] [--ambient-temperature T0]\n"
+                "                        [--ambient-temperature T0]\n"
                 "                        [--buoyancy-density A] [--buoyancy-temperature B]\n"
                 "                        [--vorticity-confinement E] [--linear-advection]\n");
             return EXIT_SUCCESS;
@@ -91,7 +88,6 @@ int main(int argc, char** argv) {
         .cell_size                  = cell_size,
         .dt                         = dt,
         .pressure_iterations        = pressure_iterations,
-        .pressure_tolerance         = pressure_tolerance,
         .ambient_temperature        = ambient_temperature,
         .buoyancy_density_factor    = buoyancy_density,
         .buoyancy_temperature_factor = buoyancy_temperature,
