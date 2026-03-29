@@ -31,39 +31,50 @@ export namespace scene_plume {
         void export_velocity(void* device_destination, float* host_destination) const;
 
     private:
-        StableFluidsSimulationConfig config_{
-            .nx                  = 96,
-            .ny                  = 128,
-            .nz                  = 96,
-            .cell_size           = 0.01f,
-            .dt                  = 1.0f / 90.0f,
-            .viscosity           = 0.00012f,
-            .diffuse_iterations  = 24,
-            .pressure_iterations = 96,
+        SmokeSimulationConfig config_{
+            .nx                          = 96,
+            .ny                          = 128,
+            .nz                          = 96,
+            .cell_size                   = 0.01f,
+            .dt                          = 1.0f / 90.0f,
+            .pressure_iterations         = 72,
+            .pressure_tolerance          = 1.0e-4f,
+            .ambient_temperature         = 0.0f,
+            .buoyancy_density_factor     = 0.16f,
+            .buoyancy_temperature_factor = 1.25f,
+            .vorticity_confinement       = 0.24f,
+            .scalar_advection_mode       = SMOKE_SIMULATION_SCALAR_ADVECTION_MONOTONIC_CUBIC,
             .boundary =
                 {
-                    .x = STABLE_FLUIDS_BOUNDARY_PERIODIC,
-                    .y = STABLE_FLUIDS_BOUNDARY_FIXED,
-                    .z = STABLE_FLUIDS_BOUNDARY_PERIODIC,
+                    .x = SMOKE_SIMULATION_BOUNDARY_PERIODIC,
+                    .y = SMOKE_SIMULATION_BOUNDARY_FIXED,
+                    .z = SMOKE_SIMULATION_BOUNDARY_PERIODIC,
                 },
             .block_x = 8,
             .block_y = 8,
             .block_z = 4,
         };
-        cudaStream_t stream_                   = nullptr;
-        StableFluidsContext context_           = nullptr;
-        StableFluidsFieldHandle density_field_ = 0;
+
+        cudaStream_t stream_             = nullptr;
+        SmokeSimulationContext context_  = nullptr;
         app::GridShape grid_{};
-        float* force_x_device_        = nullptr;
-        float* force_y_device_        = nullptr;
-        float* force_z_device_        = nullptr;
-        float* density_source_device_ = nullptr;
-        std::vector<float> force_x_host_{};
-        std::vector<float> force_z_host_{};
-        std::vector<float> source_mask_{};
-        std::vector<float> swirl_x_mask_{};
-        std::vector<float> swirl_z_mask_{};
-        std::vector<float> drift_mask_{};
+
+        float* density_source_device_     = nullptr;
+        float* temperature_source_device_ = nullptr;
+        uint8_t* occupancy_device_        = nullptr;
+        float* solid_velocity_x_device_   = nullptr;
+        float* solid_velocity_y_device_   = nullptr;
+        float* solid_velocity_z_device_   = nullptr;
+        float* solid_temperature_device_  = nullptr;
+
+        std::vector<float> density_source_host_{};
+        std::vector<float> temperature_source_host_{};
+        std::vector<uint8_t> occupancy_host_{};
+        std::vector<float> solid_velocity_x_host_{};
+        std::vector<float> solid_velocity_y_host_{};
+        std::vector<float> solid_velocity_z_host_{};
+        std::vector<float> solid_temperature_host_{};
+
         uint64_t animation_step_ = 0;
         app::SceneInfo info_{};
     };

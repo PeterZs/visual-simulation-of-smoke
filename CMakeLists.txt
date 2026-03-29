@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 4.3.0)
 set(CMAKE_EXPERIMENTAL_CXX_IMPORT_STD "451f2fe2-a8a2-47c3-bc32-94786d8fc91b")
 project(visual-simulation-of-smoke VERSION 1.0.0 LANGUAGES CXX CUDA)
 
-option(STABLE_FLUIDS_BUILD_BENCHMARK "Build benchmark applications" OFF)
-option(STABLE_FLUIDS_BUILD_VULKAN_APP "Build Vulkan sample application" OFF)
+option(VISUAL_SIMULATION_OF_SMOKE_BUILD_BENCHMARK "Build benchmark applications" OFF)
+option(VISUAL_SIMULATION_OF_SMOKE_BUILD_VULKAN_APP "Build Vulkan sample application" OFF)
 
 # ============================================================================
 # C++ Configuration
@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPERIMENTAL_CXX_MODULE_CMAKE_API ON)
-set(CMAKE_CXX_SCAN_FOR_MODULES ON)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 
 # ============================================================================
@@ -38,9 +38,9 @@ target_sources(
         PUBLIC
         visual-simulation-of-smoke-3d.h
 )
-target_link_libraries(visual-simulation-of-smoke PRIVATE CUDA::cudart)
+target_link_libraries(visual-simulation-of-smoke PRIVATE CUDA::cudart CUDA::cublas)
 target_include_directories(visual-simulation-of-smoke PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(visual-simulation-of-smoke PRIVATE STABLE_FLUIDS_BUILD_SHARED)
+target_compile_definitions(visual-simulation-of-smoke PRIVATE VISUAL_SIMULATION_OF_SMOKE_BUILD_SHARED)
 target_compile_options(visual-simulation-of-smoke PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda --expt-relaxed-constexpr>)
 if (MSVC)
     target_compile_options(visual-simulation-of-smoke PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /Zc:preprocessor>)
@@ -53,7 +53,7 @@ endif ()
 # ============================================================================
 # Samples
 # ============================================================================
-if (STABLE_FLUIDS_BUILD_BENCHMARK)
+if (VISUAL_SIMULATION_OF_SMOKE_BUILD_BENCHMARK)
     add_executable(visual-simulation-of-smoke-benchmark benchmark.cu)
     target_link_libraries(visual-simulation-of-smoke-benchmark PRIVATE visual-simulation-of-smoke CUDA::cudart)
     target_compile_options(visual-simulation-of-smoke-benchmark PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda --expt-relaxed-constexpr>)
@@ -69,7 +69,7 @@ endif ()
 # ============================================================================
 # Vulkan Sample Application
 # ============================================================================
-if (STABLE_FLUIDS_BUILD_VULKAN_APP)
+if (VISUAL_SIMULATION_OF_SMOKE_BUILD_VULKAN_APP)
     find_package(Vulkan REQUIRED)
     set(_VULKAN_HPP_IMPL "${CMAKE_CURRENT_BINARY_DIR}/_vulkan_hpp_impl.cpp")
     file(WRITE "${_VULKAN_HPP_IMPL}" [[
@@ -153,6 +153,7 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
     target_link_libraries(visual-simulation-of-smoke-app PRIVATE Vulkan::Vulkan glfw visual-simulation-of-smoke CUDA::cudart)
     target_include_directories(visual-simulation-of-smoke-app PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-app/vendor/imgui)
     set_property(TARGET visual-simulation-of-smoke-app PROPERTY CXX_MODULE_STD ON)
+    set_property(TARGET visual-simulation-of-smoke-app PROPERTY CXX_SCAN_FOR_MODULES ON)
     set_target_properties(visual-simulation-of-smoke-app PROPERTIES CUDA_SEPARABLE_COMPILATION ON CUDA_RESOLVE_DEVICE_SYMBOLS ON)
     if (MSVC)
         target_compile_options(visual-simulation-of-smoke-app PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /Zc:preprocessor>)

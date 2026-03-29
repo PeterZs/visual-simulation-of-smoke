@@ -13,18 +13,20 @@
 #include <vector>
 
 int main(int argc, char** argv) {
-    int nx                  = 128;
-    int ny                  = 160;
-    int nz                  = 128;
-    int warmup_steps        = 48;
-    int benchmark_steps     = 256;
-    int diffuse_iterations  = 24;
-    int pressure_iterations = 96;
-    float cell_size         = 0.01f;
-    float dt                = 1.0f / 90.0f;
-    float viscosity         = 0.00012f;
-    float field_diffusion   = 0.00005f;
-    float field_dissipation = 0.35f;
+    int nx                   = 128;
+    int ny                   = 160;
+    int nz                   = 128;
+    int warmup_steps         = 24;
+    int benchmark_steps      = 128;
+    int pressure_iterations  = 64;
+    float cell_size          = 0.01f;
+    float dt                 = 1.0f / 90.0f;
+    float pressure_tolerance = 1.0e-4f;
+    float ambient_temperature = 0.0f;
+    float buoyancy_density    = 0.15f;
+    float buoyancy_temperature = 1.2f;
+    float vorticity_confinement = 0.22f;
+    bool use_cubic_advection = true;
 
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
@@ -38,19 +40,22 @@ int main(int argc, char** argv) {
         else if (arg == "--nz") nz = std::atoi(next_value("--nz"));
         else if (arg == "--warmup") warmup_steps = std::atoi(next_value("--warmup"));
         else if (arg == "--steps") benchmark_steps = std::atoi(next_value("--steps"));
-        else if (arg == "--diffuse-iters") diffuse_iterations = std::atoi(next_value("--diffuse-iters"));
         else if (arg == "--pressure-iters") pressure_iterations = std::atoi(next_value("--pressure-iters"));
         else if (arg == "--cell-size") cell_size = std::strtof(next_value("--cell-size"), nullptr);
         else if (arg == "--dt") dt = std::strtof(next_value("--dt"), nullptr);
-        else if (arg == "--viscosity") viscosity = std::strtof(next_value("--viscosity"), nullptr);
-        else if (arg == "--field-diffusion") field_diffusion = std::strtof(next_value("--field-diffusion"), nullptr);
-        else if (arg == "--field-dissipation") field_dissipation = std::strtof(next_value("--field-dissipation"), nullptr);
+        else if (arg == "--pressure-tol") pressure_tolerance = std::strtof(next_value("--pressure-tol"), nullptr);
+        else if (arg == "--ambient-temperature") ambient_temperature = std::strtof(next_value("--ambient-temperature"), nullptr);
+        else if (arg == "--buoyancy-density") buoyancy_density = std::strtof(next_value("--buoyancy-density"), nullptr);
+        else if (arg == "--buoyancy-temperature") buoyancy_temperature = std::strtof(next_value("--buoyancy-temperature"), nullptr);
+        else if (arg == "--vorticity-confinement") vorticity_confinement = std::strtof(next_value("--vorticity-confinement"), nullptr);
+        else if (arg == "--linear-advection") use_cubic_advection = false;
         else if (arg == "--help") {
             std::printf(
                 "visual-simulation-of-smoke-benchmark [--nx N] [--ny N] [--nz N] [--warmup N] [--steps N]\n"
-                "                        [--diffuse-iters N] [--pressure-iters N]\n"
-                "                        [--cell-size H] [--dt DT] [--viscosity V]\n"
-                "                        [--field-diffusion D] [--field-dissipation K]\n");
+                "                        [--pressure-iters N] [--cell-size H] [--dt DT]\n"
+                "                        [--pressure-tol EPS] [--ambient-temperature T0]\n"
+                "                        [--buoyancy-density A] [--buoyancy-temperature B]\n"
+                "                        [--vorticity-confinement E] [--linear-advection]\n");
             return EXIT_SUCCESS;
         } else {
             std::fprintf(stderr, "unknown argument: %s\n", argv[i]);
@@ -63,8 +68,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s failed: %s\n", what, cudaGetErrorString(status));
         return false;
     };
-    auto check_stable = [&](const StableFluidsResult code, const char* const what) {
-        if (code == STABLE_FLUIDS_RESULT_OK) return true;
+    auto check_smoke = [&](const SmokeSimulationResult code, const char* const what) {
+        if (code == SMOKE_SIMULATION_RESULT_OK) return true;
         std::fprintf(stderr, "%s failed: %d\n", what, static_cast<int>(code));
         return false;
     };
@@ -73,48 +78,40 @@ int main(int argc, char** argv) {
     const float extent_y  = static_cast<float>(ny) * cell_size;
     const float extent_z  = static_cast<float>(nz) * cell_size;
     const float source_x  = extent_x * 0.50f;
-    const float source_y  = extent_y * 0.16f;
+    const float source_y  = extent_y * 0.12f;
     const float source_z  = extent_z * 0.50f;
     const float source_rx = extent_x * 0.07f;
-    const float source_ry = extent_y * 0.06f;
+    const float source_ry = extent_y * 0.05f;
     const float source_rz = extent_z * 0.07f;
 
-    const StableFluidsSimulationConfig config{
-        .nx                  = nx,
-        .ny                  = ny,
-        .nz                  = nz,
-        .cell_size           = cell_size,
-        .dt                  = dt,
-        .viscosity           = viscosity,
-        .diffuse_iterations  = diffuse_iterations,
-        .pressure_iterations = pressure_iterations,
+    const SmokeSimulationConfig config{
+        .nx                         = nx,
+        .ny                         = ny,
+        .nz                         = nz,
+        .cell_size                  = cell_size,
+        .dt                         = dt,
+        .pressure_iterations        = pressure_iterations,
+        .pressure_tolerance         = pressure_tolerance,
+        .ambient_temperature        = ambient_temperature,
+        .buoyancy_density_factor    = buoyancy_density,
+        .buoyancy_temperature_factor = buoyancy_temperature,
+        .vorticity_confinement      = vorticity_confinement,
+        .scalar_advection_mode      = use_cubic_advection ? SMOKE_SIMULATION_SCALAR_ADVECTION_MONOTONIC_CUBIC : SMOKE_SIMULATION_SCALAR_ADVECTION_LINEAR,
         .boundary =
             {
-                .x = STABLE_FLUIDS_BOUNDARY_PERIODIC,
-                .y = STABLE_FLUIDS_BOUNDARY_FIXED,
-                .z = STABLE_FLUIDS_BOUNDARY_PERIODIC,
+                .x = SMOKE_SIMULATION_BOUNDARY_PERIODIC,
+                .y = SMOKE_SIMULATION_BOUNDARY_FIXED,
+                .z = SMOKE_SIMULATION_BOUNDARY_PERIODIC,
             },
         .block_x = 8,
         .block_y = 8,
         .block_z = 4,
     };
 
-    const std::array fields{
-        StableFluidsFieldCreateDesc{
-            .name          = "density",
-            .diffusion     = field_diffusion,
-            .dissipation   = field_dissipation,
-            .initial_value = 0.0f,
-        },
-    };
-    std::array<StableFluidsFieldHandle, 1> field_handles{};
-
-    const auto cell_count  = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz);
+    const auto cell_count   = static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nz);
     const auto scalar_bytes = cell_count * sizeof(float);
-    std::vector<float> force_x_host(cell_count, 0.0f);
-    std::vector<float> force_y_host(cell_count, 0.0f);
-    std::vector<float> force_z_host(cell_count, 0.0f);
     std::vector<float> density_source_host(cell_count, 0.0f);
+    std::vector<float> temperature_source_host(cell_count, 0.0f);
 
     for (int z = 0; z < nz; ++z) {
         for (int y = 0; y < ny; ++y) {
@@ -129,10 +126,8 @@ int main(int argc, char** argv) {
                 const float r2   = dx * dx + dy * dy + dz * dz;
                 if (r2 > 1.0f) continue;
                 const float plume = std::exp(-2.2f * r2);
-                density_source_host[index] = 28.0f * plume;
-                force_x_host[index]        = 1.8f * plume * std::sin((pz / (extent_z + 1.0e-6f)) * 6.2831853f);
-                force_y_host[index]        = 7.5f * plume;
-                force_z_host[index]        = 1.4f * plume * std::cos((px / (extent_x + 1.0e-6f)) * 6.2831853f);
+                density_source_host[index]     = 18.0f * plume;
+                temperature_source_host[index] = 36.0f * plume;
             }
         }
     }
@@ -140,44 +135,39 @@ int main(int argc, char** argv) {
     cudaStream_t stream = nullptr;
     if (!check_cuda(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags")) return EXIT_FAILURE;
 
-    StableFluidsContext context = nullptr;
-    const StableFluidsContextCreateDesc create_desc{
-        .config      = config,
-        .stream      = stream,
-        .fields      = fields.data(),
-        .field_count = static_cast<uint32_t>(fields.size()),
+    SmokeSimulationContext context = nullptr;
+    const SmokeSimulationContextCreateDesc create_desc{
+        .config              = config,
+        .stream              = stream,
+        .initial_density     = 0.0f,
+        .initial_temperature = ambient_temperature,
     };
-    if (!check_stable(stable_fluids_create_context_cuda(&create_desc, &context, field_handles.data(), static_cast<uint32_t>(field_handles.size())), "stable_fluids_create_context_cuda")) {
+    if (!check_smoke(smoke_simulation_create_context_cuda(&create_desc, &context), "smoke_simulation_create_context_cuda")) {
         cudaStreamDestroy(stream);
         return EXIT_FAILURE;
     }
 
-    float* force_x_device        = nullptr;
-    float* force_y_device        = nullptr;
-    float* force_z_device        = nullptr;
-    float* density_source_device = nullptr;
-    float* density_export_device = nullptr;
-    if (!check_cuda(cudaMalloc(reinterpret_cast<void**>(&force_x_device), scalar_bytes), "cudaMalloc force_x_device")) return EXIT_FAILURE;
-    if (!check_cuda(cudaMalloc(reinterpret_cast<void**>(&force_y_device), scalar_bytes), "cudaMalloc force_y_device")) return EXIT_FAILURE;
-    if (!check_cuda(cudaMalloc(reinterpret_cast<void**>(&force_z_device), scalar_bytes), "cudaMalloc force_z_device")) return EXIT_FAILURE;
+    float* density_source_device     = nullptr;
+    float* temperature_source_device = nullptr;
+    float* density_export_device     = nullptr;
     if (!check_cuda(cudaMalloc(reinterpret_cast<void**>(&density_source_device), scalar_bytes), "cudaMalloc density_source_device")) return EXIT_FAILURE;
+    if (!check_cuda(cudaMalloc(reinterpret_cast<void**>(&temperature_source_device), scalar_bytes), "cudaMalloc temperature_source_device")) return EXIT_FAILURE;
     if (!check_cuda(cudaMalloc(reinterpret_cast<void**>(&density_export_device), scalar_bytes), "cudaMalloc density_export_device")) return EXIT_FAILURE;
 
-    if (!check_cuda(cudaMemcpyAsync(force_x_device, force_x_host.data(), scalar_bytes, cudaMemcpyHostToDevice, stream), "cudaMemcpyAsync force_x")) return EXIT_FAILURE;
-    if (!check_cuda(cudaMemcpyAsync(force_y_device, force_y_host.data(), scalar_bytes, cudaMemcpyHostToDevice, stream), "cudaMemcpyAsync force_y")) return EXIT_FAILURE;
-    if (!check_cuda(cudaMemcpyAsync(force_z_device, force_z_host.data(), scalar_bytes, cudaMemcpyHostToDevice, stream), "cudaMemcpyAsync force_z")) return EXIT_FAILURE;
     if (!check_cuda(cudaMemcpyAsync(density_source_device, density_source_host.data(), scalar_bytes, cudaMemcpyHostToDevice, stream), "cudaMemcpyAsync density_source")) return EXIT_FAILURE;
+    if (!check_cuda(cudaMemcpyAsync(temperature_source_device, temperature_source_host.data(), scalar_bytes, cudaMemcpyHostToDevice, stream), "cudaMemcpyAsync temperature_source")) return EXIT_FAILURE;
 
-    const StableFluidsFieldSourceDesc field_source{
-        .field  = field_handles[0],
-        .values = density_source_device,
-    };
-    const StableFluidsStepDesc step_desc{
-        .force_x            = force_x_device,
-        .force_y            = force_y_device,
-        .force_z            = force_z_device,
-        .field_sources      = &field_source,
-        .field_source_count = 1,
+    const SmokeSimulationStepDesc step_desc{
+        .density_source    = density_source_device,
+        .temperature_source = temperature_source_device,
+        .force_x           = nullptr,
+        .force_y           = nullptr,
+        .force_z           = nullptr,
+        .occupancy         = nullptr,
+        .solid_velocity_x  = nullptr,
+        .solid_velocity_y  = nullptr,
+        .solid_velocity_z  = nullptr,
+        .solid_temperature = nullptr,
     };
 
     cudaEvent_t step_begin = nullptr;
@@ -188,7 +178,7 @@ int main(int argc, char** argv) {
     {
         nvtx3::scoped_range range("benchmark.warmup");
         for (int step = 0; step < warmup_steps; ++step) {
-            if (!check_stable(stable_fluids_step_cuda(context, &step_desc), "stable_fluids_step_cuda warmup")) return EXIT_FAILURE;
+            if (!check_smoke(smoke_simulation_step_cuda(context, &step_desc), "smoke_simulation_step_cuda warmup")) return EXIT_FAILURE;
         }
         if (!check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize warmup")) return EXIT_FAILURE;
     }
@@ -198,7 +188,7 @@ int main(int argc, char** argv) {
         nvtx3::scoped_range range("benchmark.measure");
         if (!check_cuda(cudaEventRecord(step_begin, stream), "cudaEventRecord step_begin")) return EXIT_FAILURE;
         for (int step = 0; step < benchmark_steps; ++step) {
-            if (!check_stable(stable_fluids_step_cuda(context, &step_desc), "stable_fluids_step_cuda")) return EXIT_FAILURE;
+            if (!check_smoke(smoke_simulation_step_cuda(context, &step_desc), "smoke_simulation_step_cuda")) return EXIT_FAILURE;
         }
         if (!check_cuda(cudaEventRecord(step_end, stream), "cudaEventRecord step_end")) return EXIT_FAILURE;
         if (!check_cuda(cudaEventSynchronize(step_end), "cudaEventSynchronize step_end")) return EXIT_FAILURE;
@@ -208,31 +198,32 @@ int main(int argc, char** argv) {
     std::vector<float> density_host(cell_count, 0.0f);
     {
         nvtx3::scoped_range range("benchmark.export");
-        const StableFluidsExportDesc export_desc{
-            .kind  = STABLE_FLUIDS_EXPORT_FIELD,
-            .field = field_handles[0],
+        const SmokeSimulationExportDesc export_desc{
+            .kind = SMOKE_SIMULATION_EXPORT_DENSITY,
         };
-        if (!check_stable(stable_fluids_export_cuda(context, &export_desc, density_export_device), "stable_fluids_export_cuda")) return EXIT_FAILURE;
+        if (!check_smoke(smoke_simulation_export_cuda(context, &export_desc, density_export_device), "smoke_simulation_export_cuda")) return EXIT_FAILURE;
         if (!check_cuda(cudaMemcpyAsync(density_host.data(), density_export_device, scalar_bytes, cudaMemcpyDeviceToHost, stream), "cudaMemcpyAsync density_export")) return EXIT_FAILURE;
         if (!check_cuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize export")) return EXIT_FAILURE;
     }
 
-    const double avg_step_ms = benchmark_steps > 0 ? static_cast<double>(elapsed_ms) / static_cast<double>(benchmark_steps) : 0.0;
-    const double mlups       = elapsed_ms > 0.0f ? static_cast<double>(cell_count) * static_cast<double>(benchmark_steps) / (static_cast<double>(elapsed_ms) * 1000.0) : 0.0;
+    const double avg_step_ms  = benchmark_steps > 0 ? static_cast<double>(elapsed_ms) / static_cast<double>(benchmark_steps) : 0.0;
+    const double mlups        = elapsed_ms > 0.0f ? static_cast<double>(cell_count) * static_cast<double>(benchmark_steps) / (static_cast<double>(elapsed_ms) * 1000.0) : 0.0;
     const float total_density = std::accumulate(density_host.begin(), density_host.end(), 0.0f);
     const float peak_density  = density_host.empty() ? 0.0f : *std::max_element(density_host.begin(), density_host.end());
 
     std::printf(
-        "benchmark grid=%dx%dx%d warmup=%d steps=%d dt=%.6f viscosity=%.7f field_diffusion=%.7f field_dissipation=%.4f\n",
+        "benchmark grid=%dx%dx%d warmup=%d steps=%d dt=%.6f ambient=%.3f buoyancy_density=%.3f buoyancy_temperature=%.3f vorticity_confinement=%.3f advection=%s\n",
         nx,
         ny,
         nz,
         warmup_steps,
         benchmark_steps,
         dt,
-        viscosity,
-        field_diffusion,
-        field_dissipation);
+        ambient_temperature,
+        buoyancy_density,
+        buoyancy_temperature,
+        vorticity_confinement,
+        use_cubic_advection ? "monotonic_cubic" : "linear");
     std::printf(
         "timing total_ms=%.3f avg_step_ms=%.6f mlups=%.3f total_density=%.6f peak_density=%.6f\n",
         static_cast<double>(elapsed_ms),
@@ -244,11 +235,9 @@ int main(int argc, char** argv) {
     cudaEventDestroy(step_end);
     cudaEventDestroy(step_begin);
     cudaFree(density_export_device);
+    cudaFree(temperature_source_device);
     cudaFree(density_source_device);
-    cudaFree(force_z_device);
-    cudaFree(force_y_device);
-    cudaFree(force_x_device);
-    stable_fluids_destroy_context_cuda(context);
+    smoke_simulation_destroy_context_cuda(context);
     cudaStreamDestroy(stream);
     return EXIT_SUCCESS;
 }

@@ -30,7 +30,7 @@ namespace app {
     VisualizationApp::VisualizationApp() {
         using namespace vk;
 
-        auto [vkctx, sctx] = context::setup_vk_context_glfw("stable-fluids", "stable-fluids-viz");
+        auto [vkctx, sctx] = context::setup_vk_context_glfw("visual-simulation-of-smoke", "visual-simulation-of-smoke-viz");
         vkctx_             = std::move(vkctx);
         sctx_              = std::move(sctx);
         window_            = sctx_.window.get();
@@ -200,7 +200,7 @@ namespace app {
         state.selected_field = std::clamp(state.selected_field, 0, static_cast<int>(fields.size()) - 1);
         const auto& field    = fields[static_cast<size_t>(state.selected_field)];
 
-        ImGui::Begin("Stable Fluids");
+        ImGui::Begin("Visual Simulation of Smoke");
         if (ImGui::BeginCombo("Field", field.label.data())) {
             for (int i = 0; i < static_cast<int>(fields.size()); ++i) {
                 const bool is_selected = state.selected_field == i;
@@ -702,7 +702,7 @@ namespace app {
             throw std::runtime_error(std::string(what) + ": " + cudaGetErrorString(status));
         };
         const auto timeline_features = renderer.vk_context().physical_device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features>();
-        if (!timeline_features.get<vk::PhysicalDeviceVulkan12Features>().timelineSemaphore) throw std::runtime_error("stable-fluids visualizer requires Vulkan timeline semaphore support");
+        if (!timeline_features.get<vk::PhysicalDeviceVulkan12Features>().timelineSemaphore) throw std::runtime_error("visual-simulation-of-smoke visualizer requires Vulkan timeline semaphore support");
         int cuda_device_index = 0;
         check_cuda(cudaGetDevice(&cuda_device_index), "cudaGetDevice");
         int timeline_supported = 0;
